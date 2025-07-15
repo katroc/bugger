@@ -1,0 +1,35 @@
+{
+  "name": "bugger-mcp",
+  "version": "0.1.0",
+  "description": "MCP Server for managing bugs, feature requests, and improvements",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "migrate": "tsc && node dist/migrate.js",
+    "test-cli": "tsc && node dist/test-cli.js"
+  },
+  "keywords": ["mcp", "bugger", "bugs", "features", "improvements"],
+  "author": "katroc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/katroc/bugger.git"
+  },
+  "bugs": {
+    "url": "https://github.com/katroc/bugger/issues"
+  },
+  "homepage": "https://github.com/katroc/bugger#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "bin": {
+    "bugger-mcp": "./dist/index.js"
+  }
+}
