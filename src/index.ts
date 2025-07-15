@@ -9,6 +9,7 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import fs from 'fs/promises';
+import { formatBugs, formatFeatureRequests, formatImprovements, formatSearchResults, formatStatistics } from './format.js';
 import path from 'path';
 
 // Types based on your existing structure
@@ -448,7 +449,7 @@ class ProjectManagementServer {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(filtered, null, 2)
+          text: formatBugs(filtered)
         }
       ]
     };
@@ -466,7 +467,7 @@ class ProjectManagementServer {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(filtered, null, 2)
+          text: formatFeatureRequests(filtered)
         }
       ]
     };
@@ -484,7 +485,7 @@ class ProjectManagementServer {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(filtered, null, 2)
+          text: formatImprovements(filtered)
         }
       ]
     };
@@ -603,7 +604,7 @@ class ProjectManagementServer {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(results, null, 2)
+          text: formatSearchResults(results)
         }
       ]
     };
@@ -662,7 +663,7 @@ class ProjectManagementServer {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(stats, null, 2)
+          text: formatStatistics(stats)
         }
       ]
     };
