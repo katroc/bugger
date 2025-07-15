@@ -11,7 +11,13 @@
     "migrate": "tsc && node dist/migrate.js",
     "test-cli": "tsc && node dist/test-cli.js"
   },
-  "keywords": ["mcp", "bugger", "bugs", "features", "improvements"],
+  "keywords": [
+    "mcp",
+    "bugger",
+    "bugs",
+    "features",
+    "improvements"
+  ],
   "author": "katroc",
   "license": "MIT",
   "repository": {
@@ -23,13 +29,14 @@
   },
   "homepage": "https://github.com/katroc/bugger#readme",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.4.0"
+    "@modelcontextprotocol/sdk": "^0.4.0",
+    "zod": "^4.0.5"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "@types/node": "^20.19.8",
+    "typescript": "^5.8.3"
   },
   "bin": {
-    "bugger-mcp": "./dist/index.js"
+    "bugger-mcp": "dist/index.js"
   }
 }
