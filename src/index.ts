@@ -8,9 +8,9 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
-import fs from 'fs/promises';
 import { formatBugs, formatFeatureRequests, formatImprovements, formatSearchResults, formatStatistics } from './format.js';
-import path from 'path';
+import sqlite3 from 'sqlite3';
+import { open } from 'sqlite';
 
 // Types based on your existing structure
 interface Bug {
@@ -71,10 +71,9 @@ interface Improvement {
 
 class ProjectManagementServer {
   private server: Server;
-  private baseDir: string;
+  private db: any; // SQLite database instance
 
-  constructor(baseDir: string = './') {
-    this.baseDir = baseDir;
+  constructor() {
     this.server = new Server(
       {
         name: 'bugger-mcp',
@@ -88,264 +87,88 @@ class ProjectManagementServer {
     this.setupToolHandlers();
   }
 
-  private setupToolHandlers() {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
-        {
-          name: 'create_bug',
-          description: 'Create a new bug report',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              title: { type: 'string', description: 'Bug title' },
-              description: { type: 'string', description: 'Detailed bug description' },
-              component: { type: 'string', description: 'Component affected' },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
-              expectedBehavior: { type: 'string', description: 'What should happen' },
-              actualBehavior: { type: 'string', description: 'What actually happens' },
-              potentialRootCause: { type: 'string', description: 'Hypothesis about the cause' },
-              stepsToReproduce: { type: 'array', items: { type: 'string' }, description: 'Steps to reproduce the bug' },
-              filesLikelyInvolved: { type: 'array', items: { type: 'string' }, description: 'Files that might be involved' }
-            },
-            required: ['title', 'description', 'component', 'priority', 'expectedBehavior', 'actualBehavior']
-          }
-        },
-        {
-          name: 'create_feature_request',
-          description: 'Create a new feature request',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              title: { type: 'string', description: 'Feature title' },
-              description: { type: 'string', description: 'Detailed feature description' },
-              category: { type: 'string', description: 'Feature category' },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
-              userStory: { type: 'string', description: 'User story format' },
-              currentBehavior: { type: 'string', description: 'Current system behavior' },
-              expectedBehavior: { type: 'string', description: 'Expected behavior after implementation' },
-              acceptanceCriteria: { type: 'array', items: { type: 'string' }, description: 'Acceptance criteria checklist' },
-              effortEstimate: { type: 'string', enum: ['Small', 'Medium', 'Large', 'XL'] },
-              requestedBy: { type: 'string', description: 'Who requested this feature' }
-            },
-            required: ['title', 'description', 'category', 'priority', 'userStory', 'currentBehavior', 'expectedBehavior', 'acceptanceCriteria']
-          }
-        },
-        {
-          name: 'create_improvement',
-          description: 'Create a new improvement',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              title: { type: 'string', description: 'Improvement title' },
-              description: { type: 'string', description: 'Detailed improvement description' },
-              category: { type: 'string', description: 'Improvement category' },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High'] },
-              currentState: { type: 'string', description: 'Current state' },
-              desiredState: { type: 'string', description: 'Desired state after improvement' },
-              acceptanceCriteria: { type: 'array', items: { type: 'string' }, description: 'Acceptance criteria checklist' },
-              effortEstimate: { type: 'string', enum: ['Small', 'Medium', 'Large'] },
-              requestedBy: { type: 'string', description: 'Who requested this improvement' }
-            },
-            required: ['title', 'description', 'category', 'priority', 'currentState', 'desiredState', 'acceptanceCriteria']
-          }
-        },
-        {
-          name: 'list_bugs',
-          description: 'List bugs with optional filtering',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              status: { type: 'string', enum: ['Open', 'In Progress', 'Fixed', 'Closed', 'Temporarily Resolved'] },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
-              component: { type: 'string' }
-            }
-          }
-        },
-        {
-          name: 'list_feature_requests',
-          description: 'List feature requests with optional filtering',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Research Phase', 'Partially Implemented', 'Completed', 'Rejected'] },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
-              category: { type: 'string' }
-            }
-          }
-        },
-        {
-          name: 'list_improvements',
-          description: 'List improvements with optional filtering',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Completed (Awaiting Human Verification)', 'Completed', 'Rejected'] },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High'] },
-              category: { type: 'string' }
-            }
-          }
-        },
-        {
-          name: 'update_bug_status',
-          description: 'Update bug status',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              bugId: { type: 'string', description: 'Bug ID (e.g., Bug #001)' },
-              status: { type: 'string', enum: ['Open', 'In Progress', 'Fixed', 'Closed', 'Temporarily Resolved'] },
-              humanVerified: { type: 'boolean', description: 'Whether human verification is complete' }
-            },
-            required: ['bugId', 'status']
-          }
-        },
-        {
-          name: 'update_feature_status',
-          description: 'Update feature request status',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              featureId: { type: 'string', description: 'Feature ID (e.g., FR-001)' },
-              status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Research Phase', 'Partially Implemented', 'Completed', 'Rejected'] }
-            },
-            required: ['featureId', 'status']
-          }
-        },
-        {
-          name: 'update_improvement_status',
-          description: 'Update improvement status',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              improvementId: { type: 'string', description: 'Improvement ID (e.g., IMP-001)' },
-              status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Completed (Awaiting Human Verification)', 'Completed', 'Rejected'] },
-              dateCompleted: { type: 'string', description: 'Completion date (YYYY-MM-DD)' }
-            },
-            required: ['improvementId', 'status']
-          }
-        },
-        {
-          name: 'search_items',
-          description: 'Search across bugs, features, and improvements',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: { type: 'string', description: 'Search query' },
-              type: { type: 'string', enum: ['bugs', 'features', 'improvements', 'all'], description: 'Type of items to search' }
-            },
-            required: ['query']
-          }
-        },
-        {
-          name: 'get_statistics',
-          description: 'Get project statistics',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              type: { type: 'string', enum: ['bugs', 'features', 'improvements', 'all'], description: 'Type of statistics to generate' }
-            }
-          }
-        },
-        {
-          name: 'sync_from_markdown',
-          description: 'Synchronize data from existing markdown files',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              force: { type: 'boolean', description: 'Force sync even if data exists' }
-            }
-          }
-        }
-      ],
-    }));
-
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      try {
-        switch (request.params.name) {
-          case 'create_bug':
-            return await this.createBug(request.params.arguments);
-          case 'create_feature_request':
-            return await this.createFeatureRequest(request.params.arguments);
-          case 'create_improvement':
-            return await this.createImprovement(request.params.arguments);
-          case 'list_bugs':
-            return await this.listBugs(request.params.arguments);
-          case 'list_feature_requests':
-            return await this.listFeatureRequests(request.params.arguments);
-          case 'list_improvements':
-            return await this.listImprovements(request.params.arguments);
-          case 'update_bug_status':
-            return await this.updateBugStatus(request.params.arguments);
-          case 'update_feature_status':
-            return await this.updateFeatureStatus(request.params.arguments);
-          case 'update_improvement_status':
-            return await this.updateImprovementStatus(request.params.arguments);
-          case 'search_items':
-            return await this.searchItems(request.params.arguments);
-          case 'get_statistics':
-            return await this.getStatistics(request.params.arguments);
-          case 'sync_from_markdown':
-            return await this.syncFromMarkdown(request.params.arguments);
-          default:
-            throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
-        }
-      } catch (error) {
-        if (error instanceof McpError) {
-          throw error;
-        }
-        throw new McpError(ErrorCode.InternalError, `Tool execution failed: ${error}`);
-      }
+  private async initDb() {
+    this.db = await open({
+      filename: './bugger.db',
+      driver: sqlite3.Database
     });
+
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS bugs (
+        id TEXT PRIMARY KEY,
+        status TEXT,
+        priority TEXT,
+        dateReported TEXT,
+        component TEXT,
+        title TEXT,
+        description TEXT,
+        expectedBehavior TEXT,
+        actualBehavior TEXT,
+        potentialRootCause TEXT,
+        filesLikelyInvolved TEXT,
+        stepsToReproduce TEXT,
+        verification TEXT,
+        humanVerified INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS features (
+        id TEXT PRIMARY KEY,
+        status TEXT,
+        priority TEXT,
+        dateRequested TEXT,
+        category TEXT,
+        requestedBy TEXT,
+        title TEXT,
+        description TEXT,
+        userStory TEXT,
+        currentBehavior TEXT,
+        expectedBehavior TEXT,
+        acceptanceCriteria TEXT,
+        potentialImplementation TEXT,
+        dependencies TEXT,
+        effortEstimate TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS improvements (
+        id TEXT PRIMARY KEY,
+        status TEXT,
+        priority TEXT,
+        dateRequested TEXT,
+        dateCompleted TEXT,
+        category TEXT,
+        requestedBy TEXT,
+        title TEXT,
+        description TEXT,
+        currentState TEXT,
+        desiredState TEXT,
+        acceptanceCriteria TEXT,
+        implementationDetails TEXT,
+        potentialImplementation TEXT,
+        filesLikelyInvolved TEXT,
+        dependencies TEXT,
+        effortEstimate TEXT,
+        benefits TEXT
+      );
+    `);
   }
 
-  private async ensureDataFiles() {
-    const dataDir = path.join(this.baseDir, 'data');
-    await fs.mkdir(dataDir, { recursive: true });
-    
-    const files = ['bugs.json', 'features.json', 'improvements.json'];
-    for (const file of files) {
-      const filePath = path.join(dataDir, file);
-      try {
-        await fs.access(filePath);
-      } catch {
-        await fs.writeFile(filePath, JSON.stringify([], null, 2));
-      }
-    }
-  }
-
-  private async loadData<T>(type: 'bugs' | 'features' | 'improvements'): Promise<T[]> {
-    await this.ensureDataFiles();
-    const filePath = path.join(this.baseDir, 'data', `${type}.json`);
-    const data = await fs.readFile(filePath, 'utf-8');
-    return JSON.parse(data);
-  }
-
-  private async saveData<T>(type: 'bugs' | 'features' | 'improvements', data: T[]) {
-    await this.ensureDataFiles();
-    const filePath = path.join(this.baseDir, 'data', `${type}.json`);
-    await fs.writeFile(filePath, JSON.stringify(data, null, 2));
-  }
-
-  private generateNextId(type: 'bug' | 'feature' | 'improvement', existing: any[]): string {
+  private async generateNextId(type: 'bug' | 'feature' | 'improvement'): Promise<string> {
     const prefixes = { bug: 'Bug #', feature: 'FR-', improvement: 'IMP-' };
+    const tableName = type === 'bug' ? 'bugs' : type === 'feature' ? 'features' : 'improvements';
     const prefix = prefixes[type];
-    
-    const numbers = existing
-      .map(item => {
-        const match = item.id.match(new RegExp(`${prefix.replace('#', '\\#')}(\\d+)`));
-        return match ? parseInt(match[1]) : 0;
-      })
-      .filter(n => !isNaN(n));
-    
-    const nextNumber = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
-    return type === 'bug' ? `Bug #${nextNumber.toString().padStart(3, '0')}` : 
-           type === 'feature' ? `FR-${nextNumber.toString().padStart(3, '0')}` : 
+
+    const result = await this.db.get(`SELECT MAX(CAST(SUBSTR(id, LENGTH(?) + 1) AS INTEGER)) as maxNum FROM ${tableName} WHERE id LIKE ? || '%'`, prefix, prefix);
+    const maxNum = result && result.maxNum ? result.maxNum : 0;
+    const nextNumber = maxNum + 1;
+
+    return type === 'bug' ? `Bug #${nextNumber.toString().padStart(3, '0')}` :
+           type === 'feature' ? `FR-${nextNumber.toString().padStart(3, '0')}` :
            `IMP-${nextNumber.toString().padStart(3, '0')}`;
   }
 
   private async createBug(args: any) {
-    const bugs = await this.loadData<Bug>('bugs');
     const newBug: Bug = {
-      id: this.generateNextId('bug', bugs),
+      id: await this.generateNextId('bug'),
       status: 'Open',
       priority: args.priority,
       dateReported: new Date().toISOString().split('T')[0],
@@ -360,9 +183,10 @@ class ProjectManagementServer {
       humanVerified: false
     };
 
-    bugs.push(newBug);
-    await this.saveData('bugs', bugs);
-    await this.syncToMarkdown();
+    await this.db.run(
+      `INSERT INTO bugs (id, status, priority, dateReported, component, title, description, expectedBehavior, actualBehavior, potentialRootCause, filesLikelyInvolved, stepsToReproduce, humanVerified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      newBug.id, newBug.status, newBug.priority, newBug.dateReported, newBug.component, newBug.title, newBug.description, newBug.expectedBehavior, newBug.actualBehavior, newBug.potentialRootCause, JSON.stringify(newBug.filesLikelyInvolved), JSON.stringify(newBug.stepsToReproduce), newBug.humanVerified ? 1 : 0
+    );
 
     return {
       content: [
@@ -375,9 +199,8 @@ class ProjectManagementServer {
   }
 
   private async createFeatureRequest(args: any) {
-    const features = await this.loadData<FeatureRequest>('features');
     const newFeature: FeatureRequest = {
-      id: this.generateNextId('feature', features),
+      id: await this.generateNextId('feature'),
       status: 'Proposed',
       priority: args.priority,
       dateRequested: new Date().toISOString().split('T')[0],
@@ -392,9 +215,10 @@ class ProjectManagementServer {
       effortEstimate: args.effortEstimate
     };
 
-    features.push(newFeature);
-    await this.saveData('features', features);
-    await this.syncToMarkdown();
+    await this.db.run(
+      `INSERT INTO features (id, status, priority, dateRequested, category, requestedBy, title, description, userStory, currentBehavior, expectedBehavior, acceptanceCriteria, effortEstimate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      newFeature.id, newFeature.status, newFeature.priority, newFeature.dateRequested, newFeature.category, newFeature.requestedBy, newFeature.title, newFeature.description, newFeature.userStory, newFeature.currentBehavior, newFeature.expectedBehavior, JSON.stringify(newFeature.acceptanceCriteria), newFeature.effortEstimate
+    );
 
     return {
       content: [
@@ -407,9 +231,8 @@ class ProjectManagementServer {
   }
 
   private async createImprovement(args: any) {
-    const improvements = await this.loadData<Improvement>('improvements');
     const newImprovement: Improvement = {
-      id: this.generateNextId('improvement', improvements),
+      id: await this.generateNextId('improvement'),
       status: 'Proposed',
       priority: args.priority,
       dateRequested: new Date().toISOString().split('T')[0],
@@ -423,9 +246,10 @@ class ProjectManagementServer {
       effortEstimate: args.effortEstimate
     };
 
-    improvements.push(newImprovement);
-    await this.saveData('improvements', improvements);
-    await this.syncToMarkdown();
+    await this.db.run(
+      `INSERT INTO improvements (id, status, priority, dateRequested, category, requestedBy, title, description, currentState, desiredState, acceptanceCriteria, effortEstimate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      newImprovement.id, newImprovement.status, newImprovement.priority, newImprovement.dateRequested, newImprovement.category, newImprovement.requestedBy, newImprovement.title, newImprovement.description, newImprovement.currentState, newImprovement.desiredState, JSON.stringify(newImprovement.acceptanceCriteria), newImprovement.effortEstimate
+    );
 
     return {
       content: [
@@ -438,74 +262,118 @@ class ProjectManagementServer {
   }
 
   private async listBugs(args: any) {
-    const bugs = await this.loadData<Bug>('bugs');
-    let filtered = bugs;
+    let query = 'SELECT * FROM bugs WHERE 1=1';
+    const params: any[] = [];
 
-    if (args.status) filtered = filtered.filter(b => b.status === args.status);
-    if (args.priority) filtered = filtered.filter(b => b.priority === args.priority);
-    if (args.component) filtered = filtered.filter(b => b.component.toLowerCase().includes(args.component.toLowerCase()));
+    if (args.status) {
+      query += ' AND status = ?';
+      params.push(args.status);
+    }
+    if (args.priority) {
+      query += ' AND priority = ?';
+      params.push(args.priority);
+    }
+    if (args.component) {
+      query += ' AND component LIKE ?';
+      params.push(`%${args.component}%`);
+    }
 
+    const bugs = await this.db.all(query, params);
     return {
       content: [
         {
           type: 'text',
-          text: formatBugs(filtered)
+          text: formatBugs(bugs.map((bug: any) => ({
+            ...bug,
+            filesLikelyInvolved: JSON.parse(bug.filesLikelyInvolved || '[]'),
+            stepsToReproduce: JSON.parse(bug.stepsToReproduce || '[]'),
+            verification: JSON.parse(bug.verification || '[]'),
+            humanVerified: !!bug.humanVerified
+          })))
         }
       ]
     };
   }
 
   private async listFeatureRequests(args: any) {
-    const features = await this.loadData<FeatureRequest>('features');
-    let filtered = features;
+    let query = 'SELECT * FROM features WHERE 1=1';
+    const params: any[] = [];
 
-    if (args.status) filtered = filtered.filter(f => f.status === args.status);
-    if (args.priority) filtered = filtered.filter(f => f.priority === args.priority);
-    if (args.category) filtered = filtered.filter(f => f.category.toLowerCase().includes(args.category.toLowerCase()));
+    if (args.status) {
+      query += ' AND status = ?';
+      params.push(args.status);
+    }
+    if (args.priority) {
+      query += ' AND priority = ?';
+      params.push(args.priority);
+    }
+    if (args.category) {
+      query += ' AND category LIKE ?';
+      params.push(`%${args.category}%`);
+    }
 
+    const features = await this.db.all(query, params);
     return {
       content: [
         {
           type: 'text',
-          text: formatFeatureRequests(filtered)
+          text: formatFeatureRequests(features.map((feature: any) => ({
+            ...feature,
+            acceptanceCriteria: JSON.parse(feature.acceptanceCriteria || '[]'),
+            dependencies: JSON.parse(feature.dependencies || '[]')
+          })))
         }
       ]
     };
   }
 
   private async listImprovements(args: any) {
-    const improvements = await this.loadData<Improvement>('improvements');
-    let filtered = improvements;
+    let query = 'SELECT * FROM improvements WHERE 1=1';
+    const params: any[] = [];
 
-    if (args.status) filtered = filtered.filter(i => i.status === args.status);
-    if (args.priority) filtered = filtered.filter(i => i.priority === args.priority);
-    if (args.category) filtered = filtered.filter(i => i.category.toLowerCase().includes(args.category.toLowerCase()));
+    if (args.status) {
+      query += ' AND status = ?';
+      params.push(args.status);
+    }
+    if (args.priority) {
+      query += ' AND priority = ?';
+      params.push(args.priority);
+    }
+    if (args.category) {
+      query += ' AND category LIKE ?';
+      params.push(`%${args.category}%`);
+    }
 
+    const improvements = await this.db.all(query, params);
     return {
       content: [
         {
           type: 'text',
-          text: formatImprovements(filtered)
+          text: formatImprovements(improvements.map((improvement: any) => ({
+            ...improvement,
+            acceptanceCriteria: JSON.parse(improvement.acceptanceCriteria || '[]'),
+            filesLikelyInvolved: JSON.parse(improvement.filesLikelyInvolved || '[]'),
+            dependencies: JSON.parse(improvement.dependencies || '[]'),
+            benefits: JSON.parse(improvement.benefits || '[]')
+          })))
         }
       ]
     };
   }
 
   private async updateBugStatus(args: any) {
-    const bugs = await this.loadData<Bug>('bugs');
-    const bugIndex = bugs.findIndex(b => b.id === args.bugId);
+    const bug = await this.db.get('SELECT * FROM bugs WHERE id = ?', args.bugId);
     
-    if (bugIndex === -1) {
+    if (!bug) {
       throw new McpError(ErrorCode.InvalidParams, `Bug ${args.bugId} not found`);
     }
 
-    bugs[bugIndex].status = args.status;
+    bug.status = args.status;
     if (args.humanVerified !== undefined) {
-      bugs[bugIndex].humanVerified = args.humanVerified;
+      bug.humanVerified = args.humanVerified ? 1 : 0;
     }
 
-    await this.saveData('bugs', bugs);
-    await this.syncToMarkdown();
+    await this.db.run('UPDATE bugs SET status = ?, humanVerified = ? WHERE id = ?', bug.status, bug.humanVerified, args.bugId);
 
     return {
       content: [
@@ -518,16 +386,14 @@ class ProjectManagementServer {
   }
 
   private async updateFeatureStatus(args: any) {
-    const features = await this.loadData<FeatureRequest>('features');
-    const featureIndex = features.findIndex(f => f.id === args.featureId);
+    const feature = await this.db.get('SELECT * FROM features WHERE id = ?', args.featureId);
     
-    if (featureIndex === -1) {
+    if (!feature) {
       throw new McpError(ErrorCode.InvalidParams, `Feature ${args.featureId} not found`);
     }
 
-    features[featureIndex].status = args.status;
-    await this.saveData('features', features);
-    await this.syncToMarkdown();
+    feature.status = args.status;
+    await this.db.run('UPDATE features SET status = ? WHERE id = ?', feature.status, args.featureId);
 
     return {
       content: [
@@ -540,20 +406,18 @@ class ProjectManagementServer {
   }
 
   private async updateImprovementStatus(args: any) {
-    const improvements = await this.loadData<Improvement>('improvements');
-    const improvementIndex = improvements.findIndex(i => i.id === args.improvementId);
+    const improvement = await this.db.get('SELECT * FROM improvements WHERE id = ?', args.improvementId);
     
-    if (improvementIndex === -1) {
+    if (!improvement) {
       throw new McpError(ErrorCode.InvalidParams, `Improvement ${args.improvementId} not found`);
     }
 
-    improvements[improvementIndex].status = args.status;
+    improvement.status = args.status;
     if (args.dateCompleted) {
-      improvements[improvementIndex].dateCompleted = args.dateCompleted;
+      improvement.dateCompleted = args.dateCompleted;
     }
 
-    await this.saveData('improvements', improvements);
-    await this.syncToMarkdown();
+    await this.db.run('UPDATE improvements SET status = ?, dateCompleted = ? WHERE id = ?', improvement.status, improvement.dateCompleted, args.improvementId);
 
     return {
       content: [
@@ -571,33 +435,55 @@ class ProjectManagementServer {
     const results: any[] = [];
 
     if (searchType === 'bugs' || searchType === 'all') {
-      const bugs = await this.loadData<Bug>('bugs');
-      const matchingBugs = bugs.filter(b => 
-        b.title.toLowerCase().includes(query) ||
-        b.description.toLowerCase().includes(query) ||
-        b.component.toLowerCase().includes(query)
+      const bugs = await this.db.all(
+        `SELECT * FROM bugs WHERE 
+         LOWER(title) LIKE ? OR 
+         LOWER(description) LIKE ? OR 
+         LOWER(component) LIKE ?`,
+        `%${query}%`, `%${query}%`, `%${query}%`
       );
-      results.push(...matchingBugs.map(b => ({ type: 'bug', ...b })));
+      results.push(...bugs.map((bug: any) => ({
+        type: 'bug',
+        ...bug,
+        filesLikelyInvolved: JSON.parse(bug.filesLikelyInvolved || '[]'),
+        stepsToReproduce: JSON.parse(bug.stepsToReproduce || '[]'),
+        verification: JSON.parse(bug.verification || '[]'),
+        humanVerified: !!bug.humanVerified
+      })));
     }
 
     if (searchType === 'features' || searchType === 'all') {
-      const features = await this.loadData<FeatureRequest>('features');
-      const matchingFeatures = features.filter(f => 
-        f.title.toLowerCase().includes(query) ||
-        f.description.toLowerCase().includes(query) ||
-        f.category.toLowerCase().includes(query)
+      const features = await this.db.all(
+        `SELECT * FROM features WHERE 
+         LOWER(title) LIKE ? OR 
+         LOWER(description) LIKE ? OR 
+         LOWER(category) LIKE ?`,
+        `%${query}%`, `%${query}%`, `%${query}%`
       );
-      results.push(...matchingFeatures.map(f => ({ type: 'feature', ...f })));
+      results.push(...features.map((feature: any) => ({
+        type: 'feature',
+        ...feature,
+        acceptanceCriteria: JSON.parse(feature.acceptanceCriteria || '[]'),
+        dependencies: JSON.parse(feature.dependencies || '[]')
+      })));
     }
 
     if (searchType === 'improvements' || searchType === 'all') {
-      const improvements = await this.loadData<Improvement>('improvements');
-      const matchingImprovements = improvements.filter(i => 
-        i.title.toLowerCase().includes(query) ||
-        i.description.toLowerCase().includes(query) ||
-        i.category.toLowerCase().includes(query)
+      const improvements = await this.db.all(
+        `SELECT * FROM improvements WHERE 
+         LOWER(title) LIKE ? OR 
+         LOWER(description) LIKE ? OR 
+         LOWER(category) LIKE ?`,
+        `%${query}%`, `%${query}%`, `%${query}%`
       );
-      results.push(...matchingImprovements.map(i => ({ type: 'improvement', ...i })));
+      results.push(...improvements.map((improvement: any) => ({
+        type: 'improvement',
+        ...improvement,
+        acceptanceCriteria: JSON.parse(improvement.acceptanceCriteria || '[]'),
+        filesLikelyInvolved: JSON.parse(improvement.filesLikelyInvolved || '[]'),
+        dependencies: JSON.parse(improvement.dependencies || '[]'),
+        benefits: JSON.parse(improvement.benefits || '[]')
+      })));
     }
 
     return {
@@ -615,7 +501,7 @@ class ProjectManagementServer {
     const stats: any = {};
 
     if (type === 'bugs' || type === 'all') {
-      const bugs = await this.loadData<Bug>('bugs');
+      const bugs = await this.db.all('SELECT status, priority FROM bugs');
       stats.bugs = {
         total: bugs.length,
         byStatus: bugs.reduce((acc: any, bug) => {
@@ -630,7 +516,7 @@ class ProjectManagementServer {
     }
 
     if (type === 'features' || type === 'all') {
-      const features = await this.loadData<FeatureRequest>('features');
+      const features = await this.db.all('SELECT status, priority FROM features');
       stats.features = {
         total: features.length,
         byStatus: features.reduce((acc: any, feature) => {
@@ -645,7 +531,7 @@ class ProjectManagementServer {
     }
 
     if (type === 'improvements' || type === 'all') {
-      const improvements = await this.loadData<Improvement>('improvements');
+      const improvements = await this.db.all('SELECT status, priority FROM improvements');
       stats.improvements = {
         total: improvements.length,
         byStatus: improvements.reduce((acc: any, improvement) => {
@@ -681,20 +567,4 @@ class ProjectManagementServer {
       ]
     };
   }
-
-  private async syncToMarkdown() {
-    // This would update your markdown files with current data
-    // Implementation would generate markdown from the JSON data
-    // For now, we'll just ensure data persistence in JSON format
-  }
-
-  async run() {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-    console.error('Project Management MCP server running on stdio');
-  }
 }
-
-// Run the server
-const server = new ProjectManagementServer();
-server.run().catch(console.error);
