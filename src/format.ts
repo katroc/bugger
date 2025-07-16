@@ -1,3 +1,69 @@
+// Color and formatting utilities for MCP output
+const colors = {
+  // Status colors
+  red: (text: string) => `🔴 ${text}`,
+  green: (text: string) => `🟢 ${text}`,
+  yellow: (text: string) => `🟡 ${text}`,
+  blue: (text: string) => `🔵 ${text}`,
+  orange: (text: string) => `🟠 ${text}`,
+  purple: (text: string) => `🟣 ${text}`,
+  
+  // Priority colors
+  critical: (text: string) => `🚨 ${text}`,
+  high: (text: string) => `⚠️ ${text}`,
+  medium: (text: string) => `📋 ${text}`,
+  low: (text: string) => `📝 ${text}`,
+  
+  // General formatting
+  highlight: (text: string) => `✨ ${text}`,
+  success: (text: string) => `✅ ${text}`,
+  info: (text: string) => `ℹ️ ${text}`,
+  warning: (text: string) => `⚠️ ${text}`,
+  error: (text: string) => `❌ ${text}`
+};
+
+function getStatusColor(status: string): (text: string) => string {
+  switch (status.toLowerCase()) {
+    case 'open':
+    case 'proposed':
+      return colors.blue;
+    case 'in progress':
+    case 'in development':
+    case 'in discussion':
+      return colors.yellow;
+    case 'fixed':
+    case 'completed':
+    case 'approved':
+      return colors.green;
+    case 'closed':
+    case 'rejected':
+      return colors.red;
+    case 'temporarily resolved':
+    case 'research phase':
+    case 'partially implemented':
+      return colors.orange;
+    case 'completed (awaiting human verification)':
+      return colors.purple;
+    default:
+      return colors.info;
+  }
+}
+
+function getPriorityColor(priority: string): (text: string) => string {
+  switch (priority.toLowerCase()) {
+    case 'critical':
+      return colors.critical;
+    case 'high':
+      return colors.high;
+    case 'medium':
+      return colors.medium;
+    case 'low':
+      return colors.low;
+    default:
+      return colors.info;
+  }
+}
+
 interface Bug {
     id: string;
     status: 'Open' | 'In Progress' | 'Fixed' | 'Closed' | 'Temporarily Resolved';
@@ -60,9 +126,12 @@ interface Bug {
     }
   
     return bugs.map(bug => {
+      const statusColor = getStatusColor(bug.status);
+      const priorityColor = getPriorityColor(bug.priority);
+      
       return `
   **${bug.id}: ${bug.title}**
-  *Status*: ${bug.status} | *Priority*: ${bug.priority} | *Component*: ${bug.component}
+  *Status*: ${statusColor(bug.status)} | *Priority*: ${priorityColor(bug.priority)} | *Component*: ${bug.component}
   *Reported*: ${bug.dateReported}
   
   *Description*:
@@ -83,9 +152,12 @@ interface Bug {
     }
   
     return features.map(feature => {
+      const statusColor = getStatusColor(feature.status);
+      const priorityColor = getPriorityColor(feature.priority);
+      
       return `
   **${feature.id}: ${feature.title}**
-  *Status*: ${feature.status} | *Priority*: ${feature.priority} | *Category*: ${feature.category}
+  *Status*: ${statusColor(feature.status)} | *Priority*: ${priorityColor(feature.priority)} | *Category*: ${feature.category}
   *Requested*: ${feature.dateRequested}
   
   *User Story*:
@@ -106,9 +178,12 @@ interface Bug {
     }
   
     return improvements.map(improvement => {
+      const statusColor = getStatusColor(improvement.status);
+      const priorityColor = getPriorityColor(improvement.priority);
+      
       return `
   **${improvement.id}: ${improvement.title}**
-  *Status*: ${improvement.status} | *Priority*: ${improvement.priority} | *Category*: ${improvement.category}
+  *Status*: ${statusColor(improvement.status)} | *Priority*: ${priorityColor(improvement.priority)} | *Category*: ${improvement.category}
   *Requested*: ${improvement.dateRequested}
   
   *Current State*:
@@ -165,13 +240,15 @@ interface Bug {
     if (category.byStatus) {
       output += '*By Status*:\n';
       for (const [status, count] of Object.entries(category.byStatus)) {
-        output += '  - ' + status + ': ' + count + '\n';
+        const statusColor = getStatusColor(status);
+        output += '  - ' + statusColor(status) + ': ' + count + '\n';
       }
     }
     if (category.byPriority) {
       output += '*By Priority*:\n';
       for (const [priority, count] of Object.entries(category.byPriority)) {
-        output += '  - ' + priority + ': ' + count + '\n';
+        const priorityColor = getPriorityColor(priority);
+        output += '  - ' + priorityColor(priority) + ': ' + count + '\n';
       }
     }
     return output;

@@ -151,6 +151,15 @@ class ProjectManagementServer {
               effortEstimate TEXT,
               benefits TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS relationships (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              fromItem TEXT NOT NULL,
+              toItem TEXT NOT NULL,
+              relationshipType TEXT NOT NULL,
+              dateCreated TEXT NOT NULL,
+              UNIQUE(fromItem, toItem, relationshipType)
+            );
           `, (err) => {
             if (err) {
               reject(new McpError(ErrorCode.InternalError, `Failed to create tables: ${err.message}`));
@@ -807,6 +816,132 @@ class ProjectManagementServer {
     };
   }
 
+  private async linkItems(args: any) {
+    const { fromItem, toItem, relationshipType } = args;
+    
+    // Validate that both items exist
+    const fromExists = await this.itemExists(fromItem);
+    const toExists = await this.itemExists(toItem);
+    
+    if (!fromExists) {
+      throw new McpError(ErrorCode.InvalidParams, `Source item ${fromItem} does not exist`);
+    }
+    if (!toExists) {
+      throw new McpError(ErrorCode.InvalidParams, `Target item ${toItem} does not exist`);
+    }
+    
+    return this.withTransaction(async (db) => {
+      return new Promise((resolve, reject) => {
+        const stmt = db.prepare(`
+          INSERT OR REPLACE INTO relationships 
+          (fromItem, toItem, relationshipType, dateCreated) 
+          VALUES (?, ?, ?, ?)
+        `);
+        
+        const dateCreated = new Date().toISOString();
+        
+        stmt.run([fromItem, toItem, relationshipType, dateCreated], function(err) {
+          if (err) {
+            reject(new McpError(ErrorCode.InternalError, `Failed to create relationship: ${err.message}`));
+          } else {
+            resolve({
+              content: [
+                {
+                  type: 'text',
+                  text: `✓ Created relationship: ${fromItem} ${relationshipType} ${toItem}`
+                }
+              ]
+            });
+          }
+        });
+      });
+    });
+  }
+
+  private async getRelatedItems(args: any) {
+    const { itemId } = args;
+    
+    // Validate that the item exists
+    const itemExists = await this.itemExists(itemId);
+    if (!itemExists) {
+      throw new McpError(ErrorCode.InvalidParams, `Item ${itemId} does not exist`);
+    }
+    
+    return new Promise((resolve, reject) => {
+      const sql = `
+        SELECT fromItem, toItem, relationshipType, dateCreated 
+        FROM relationships 
+        WHERE fromItem = ? OR toItem = ?
+      `;
+      
+      this.db.all(sql, [itemId, itemId], (err, rows: any[]) => {
+        if (err) {
+          reject(new McpError(ErrorCode.InternalError, `Failed to query relationships: ${err.message}`));
+          return;
+        }
+        
+        if (rows.length === 0) {
+          resolve({
+            content: [
+              {
+                type: 'text',
+                text: `No relationships found for ${itemId}`
+              }
+            ]
+          });
+          return;
+        }
+        
+        let output = `## Relationships for ${itemId}\n\n`;
+        
+        rows.forEach(row => {
+          const isSource = row.fromItem === itemId;
+          const relatedItem = isSource ? row.toItem : row.fromItem;
+          const direction = isSource ? '→' : '←';
+          output += `${direction} ${row.relationshipType} ${relatedItem}\n`;
+        });
+        
+        resolve({
+          content: [
+            {
+              type: 'text',
+              text: output
+            }
+          ]
+        });
+      });
+    });
+  }
+
+  private async itemExists(itemId: string): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      const queries = [
+        'SELECT 1 FROM bugs WHERE id = ?',
+        'SELECT 1 FROM features WHERE id = ?',
+        'SELECT 1 FROM improvements WHERE id = ?'
+      ];
+      
+      let found = false;
+      let completed = 0;
+      
+      queries.forEach(query => {
+        this.db.get(query, [itemId], (err, row) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          if (row) {
+            found = true;
+          }
+          completed++;
+          if (completed === queries.length) {
+            resolve(found);
+          }
+        });
+      });
+    });
+  }
+
   private setupToolHandlers() {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
@@ -973,6 +1108,34 @@ class ProjectManagementServer {
               force: { type: 'boolean', description: 'Force sync even if data exists' }
             }
           }
+        },
+        {
+          name: 'link_items',
+          description: 'Create relationships between bugs, features, and improvements',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              fromItem: { type: 'string', description: 'Source item ID (e.g., Bug #001, FR-001, IMP-001)' },
+              toItem: { type: 'string', description: 'Target item ID (e.g., Bug #002, FR-002, IMP-002)' },
+              relationshipType: { 
+                type: 'string', 
+                enum: ['blocks', 'relates_to', 'duplicate_of'],
+                description: 'Type of relationship between items' 
+              }
+            },
+            required: ['fromItem', 'toItem', 'relationshipType']
+          }
+        },
+        {
+          name: 'get_related_items',
+          description: 'Get items related to a specific item',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              itemId: { type: 'string', description: 'Item ID to find relationships for (e.g., Bug #001, FR-001, IMP-001)' }
+            },
+            required: ['itemId']
+          }
         }
       ]
     }));
@@ -1006,6 +1169,10 @@ class ProjectManagementServer {
             return await this.getStatistics(args) as any;
           case 'sync_from_markdown':
             return await this.syncFromMarkdown(args) as any;
+          case 'link_items':
+            return await this.linkItems(args) as any;
+          case 'get_related_items':
+            return await this.getRelatedItems(args) as any;
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
