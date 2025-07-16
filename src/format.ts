@@ -126,24 +126,17 @@ interface Bug {
     }
   
     return bugs.map(bug => {
-      const statusColor = getStatusColor(bug.status);
-      const priorityColor = getPriorityColor(bug.priority);
       
       return `
-  **${bug.id}: ${bug.title}**
-  *Status*: ${statusColor(bug.status)} | *Priority*: ${priorityColor(bug.priority)} | *Component*: ${bug.component}
-  *Reported*: ${bug.dateReported}
-  
-  *Description*:
-  ${bug.description}
-  
-  *Actual Behavior*:
-  ${bug.actualBehavior}
-  
-  *Expected Behavior*:
-  ${bug.expectedBehavior}
+${bug.id}: ${bug.title}
+${bug.status} • ${bug.priority} • ${bug.component} • ${bug.dateReported}
+
+${bug.description}
+
+Actual: ${bug.actualBehavior}
+Expected: ${bug.expectedBehavior}
       `.trim();
-    }).join('\n\n---\n\n');
+    }).join('\n\n');
   }
   
   export function formatFeatureRequests(features: FeatureRequest[]): string {
@@ -152,24 +145,16 @@ interface Bug {
     }
   
     return features.map(feature => {
-      const statusColor = getStatusColor(feature.status);
-      const priorityColor = getPriorityColor(feature.priority);
-      
       return `
-  **${feature.id}: ${feature.title}**
-  *Status*: ${statusColor(feature.status)} | *Priority*: ${priorityColor(feature.priority)} | *Category*: ${feature.category}
-  *Requested*: ${feature.dateRequested}
-  
-  *User Story*:
-  ${feature.userStory}
-  
-  *Current Behavior*:
-  ${feature.currentBehavior}
-  
-  *Expected Behavior*:
-  ${feature.expectedBehavior}
+${feature.id}: ${feature.title}
+${feature.status} • ${feature.priority} • ${feature.category} • ${feature.dateRequested}
+
+${feature.userStory}
+
+Current: ${feature.currentBehavior}
+Expected: ${feature.expectedBehavior}
       `.trim();
-    }).join('\n\n---\n\n');
+    }).join('\n\n');
   }
   
   export function formatImprovements(improvements: Improvement[]): string {
@@ -178,21 +163,16 @@ interface Bug {
     }
   
     return improvements.map(improvement => {
-      const statusColor = getStatusColor(improvement.status);
-      const priorityColor = getPriorityColor(improvement.priority);
-      
       return `
-  **${improvement.id}: ${improvement.title}**
-  *Status*: ${statusColor(improvement.status)} | *Priority*: ${priorityColor(improvement.priority)} | *Category*: ${improvement.category}
-  *Requested*: ${improvement.dateRequested}
-  
-  *Current State*:
-  ${improvement.currentState}
-  
-  *Desired State*:
-  ${improvement.desiredState}
+${improvement.id}: ${improvement.title}
+${improvement.status} • ${improvement.priority} • ${improvement.category} • ${improvement.dateRequested}
+
+${improvement.description}
+
+Current: ${improvement.currentState}
+Desired: ${improvement.desiredState}
       `.trim();
-    }).join('\n\n---\n\n');
+    }).join('\n\n');
   }
   
   export function formatSearchResults(results: any[], metadata?: any): string {
@@ -222,7 +202,7 @@ interface Bug {
         default:
           return JSON.stringify(item, null, 2);
       }
-    }).join('\n\n---\n\n');
+    }).join('\n\n');
     
     return output + formattedResults;
   }
