@@ -604,7 +604,7 @@ class ProjectManagementServer {
 
   private async searchItems(args: any) {
     return new Promise((resolve, reject) => {
-      const query = args.query.toLowerCase();
+      const query = args.query ? args.query.toLowerCase() : '';
       const searchType = args.type || 'all';
       const results: any[] = [];
       let completedQueries = 0;
@@ -613,11 +613,58 @@ class ProjectManagementServer {
       const finishSearch = () => {
         completedQueries++;
         if (completedQueries === totalQueries) {
+          // Sort results by date (newest first) if no specific sort order
+          const sortBy = args.sortBy || 'date';
+          const sortOrder = args.sortOrder || 'desc';
+          
+          results.sort((a, b) => {
+            let aValue, bValue;
+            
+            switch (sortBy) {
+              case 'date':
+                aValue = new Date(a.dateReported || a.dateRequested || 0);
+                bValue = new Date(b.dateReported || b.dateRequested || 0);
+                break;
+              case 'priority':
+                const priorityOrder = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 };
+                aValue = priorityOrder[a.priority as keyof typeof priorityOrder] || 0;
+                bValue = priorityOrder[b.priority as keyof typeof priorityOrder] || 0;
+                break;
+              case 'title':
+                aValue = (a.title || '').toLowerCase();
+                bValue = (b.title || '').toLowerCase();
+                break;
+              case 'status':
+                aValue = (a.status || '').toLowerCase();
+                bValue = (b.status || '').toLowerCase();
+                break;
+              default:
+                aValue = (a.title || '').toLowerCase();
+                bValue = (b.title || '').toLowerCase();
+            }
+            
+            if (sortOrder === 'asc') {
+              return aValue < bValue ? -1 : aValue > bValue ? 1 : 0;
+            } else {
+              return aValue > bValue ? -1 : aValue < bValue ? 1 : 0;
+            }
+          });
+          
+          // Apply limit if specified
+          const limit = args.limit || results.length;
+          const offset = args.offset || 0;
+          const limitedResults = results.slice(offset, offset + limit);
+          
           resolve({
             content: [
               {
                 type: 'text',
-                text: formatSearchResults(results)
+                text: formatSearchResults(limitedResults, {
+                  total: results.length,
+                  showing: limitedResults.length,
+                  offset: offset,
+                  limit: limit
+                })
               }
             ]
           });
@@ -625,87 +672,276 @@ class ProjectManagementServer {
       };
 
       if (searchType === 'bugs' || searchType === 'all') {
-        this.db.all(
-          `SELECT * FROM bugs WHERE 
-           LOWER(title) LIKE ? OR 
-           LOWER(description) LIKE ? OR 
-           LOWER(component) LIKE ?`,
-          [`%${query}%`, `%${query}%`, `%${query}%`],
-          (err: any, rows: any[]) => {
-            if (err) {
-              reject(new McpError(ErrorCode.InternalError, `Failed to search bugs: ${err.message}`));
-              return;
-            }
-
-            results.push(...rows.map((bug: any) => ({
-              type: 'bug',
-              ...bug,
-              filesLikelyInvolved: JSON.parse(bug.filesLikelyInvolved || '[]'),
-              stepsToReproduce: JSON.parse(bug.stepsToReproduce || '[]'),
-              verification: JSON.parse(bug.verification || '[]'),
-              humanVerified: !!bug.humanVerified
-            })));
-
-            finishSearch();
-          }
-        );
+        this.searchBugs(query, args).then(bugs => {
+          results.push(...bugs);
+          finishSearch();
+        }).catch(reject);
       }
 
       if (searchType === 'features' || searchType === 'all') {
-        this.db.all(
-          `SELECT * FROM features WHERE 
-           LOWER(title) LIKE ? OR 
-           LOWER(description) LIKE ? OR 
-           LOWER(category) LIKE ?`,
-          [`%${query}%`, `%${query}%`, `%${query}%`],
-          (err: any, rows: any[]) => {
-            if (err) {
-              reject(new McpError(ErrorCode.InternalError, `Failed to search features: ${err.message}`));
-              return;
-            }
-
-            results.push(...rows.map((feature: any) => ({
-              type: 'feature',
-              ...feature,
-              acceptanceCriteria: JSON.parse(feature.acceptanceCriteria || '[]'),
-              dependencies: JSON.parse(feature.dependencies || '[]')
-            })));
-
-            finishSearch();
-          }
-        );
+        this.searchFeatures(query, args).then(features => {
+          results.push(...features);
+          finishSearch();
+        }).catch(reject);
       }
 
       if (searchType === 'improvements' || searchType === 'all') {
-        this.db.all(
-          `SELECT * FROM improvements WHERE 
-           LOWER(title) LIKE ? OR 
-           LOWER(description) LIKE ? OR 
-           LOWER(category) LIKE ?`,
-          [`%${query}%`, `%${query}%`, `%${query}%`],
-          (err: any, rows: any[]) => {
-            if (err) {
-              reject(new McpError(ErrorCode.InternalError, `Failed to search improvements: ${err.message}`));
-              return;
-            }
-
-            results.push(...rows.map((improvement: any) => ({
-              type: 'improvement',
-              ...improvement,
-              acceptanceCriteria: JSON.parse(improvement.acceptanceCriteria || '[]'),
-              filesLikelyInvolved: JSON.parse(improvement.filesLikelyInvolved || '[]'),
-              dependencies: JSON.parse(improvement.dependencies || '[]'),
-              benefits: JSON.parse(improvement.benefits || '[]')
-            })));
-
-            finishSearch();
-          }
-        );
+        this.searchImprovements(query, args).then(improvements => {
+          results.push(...improvements);
+          finishSearch();
+        }).catch(reject);
       }
 
       if (searchType !== 'bugs' && searchType !== 'features' && searchType !== 'improvements' && searchType !== 'all') {
         reject(new McpError(ErrorCode.InvalidParams, `Invalid search type: ${searchType}`));
       }
+    });
+  }
+
+  private async searchBugs(query: string, args: any): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      let sql = 'SELECT * FROM bugs WHERE 1=1';
+      const params: any[] = [];
+
+      // Text search
+      if (query && query.trim()) {
+        const searchFields = args.searchFields || ['title', 'description', 'component'];
+        const searchConditions = searchFields.map((field: string) => `LOWER(${field}) LIKE ?`).join(' OR ');
+        sql += ` AND (${searchConditions})`;
+        searchFields.forEach(() => params.push(`%${query}%`));
+      }
+
+      // Status filter
+      if (args.status) {
+        if (Array.isArray(args.status)) {
+          const placeholders = args.status.map(() => '?').join(', ');
+          sql += ` AND status IN (${placeholders})`;
+          params.push(...args.status);
+        } else {
+          sql += ` AND status = ?`;
+          params.push(args.status);
+        }
+      }
+
+      // Priority filter
+      if (args.priority) {
+        if (Array.isArray(args.priority)) {
+          const placeholders = args.priority.map(() => '?').join(', ');
+          sql += ` AND priority IN (${placeholders})`;
+          params.push(...args.priority);
+        } else {
+          sql += ` AND priority = ?`;
+          params.push(args.priority);
+        }
+      }
+
+      // Date range filter
+      if (args.dateFrom) {
+        sql += ` AND dateReported >= ?`;
+        params.push(args.dateFrom);
+      }
+      if (args.dateTo) {
+        sql += ` AND dateReported <= ?`;
+        params.push(args.dateTo);
+      }
+
+      // Component filter
+      if (args.component) {
+        sql += ` AND LOWER(component) LIKE ?`;
+        params.push(`%${args.component.toLowerCase()}%`);
+      }
+
+      // Human verified filter
+      if (args.humanVerified !== undefined) {
+        sql += ` AND humanVerified = ?`;
+        params.push(args.humanVerified ? 1 : 0);
+      }
+
+      this.db.all(sql, params, (err: any, rows: any[]) => {
+        if (err) {
+          reject(new McpError(ErrorCode.InternalError, `Failed to search bugs: ${err.message}`));
+          return;
+        }
+
+        const bugs = rows.map((bug: any) => ({
+          type: 'bug',
+          ...bug,
+          filesLikelyInvolved: JSON.parse(bug.filesLikelyInvolved || '[]'),
+          stepsToReproduce: JSON.parse(bug.stepsToReproduce || '[]'),
+          verification: JSON.parse(bug.verification || '[]'),
+          humanVerified: !!bug.humanVerified
+        }));
+
+        resolve(bugs);
+      });
+    });
+  }
+
+  private async searchFeatures(query: string, args: any): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      let sql = 'SELECT * FROM features WHERE 1=1';
+      const params: any[] = [];
+
+      // Text search
+      if (query && query.trim()) {
+        const searchFields = args.searchFields || ['title', 'description', 'category'];
+        const searchConditions = searchFields.map((field: string) => `LOWER(${field}) LIKE ?`).join(' OR ');
+        sql += ` AND (${searchConditions})`;
+        searchFields.forEach(() => params.push(`%${query}%`));
+      }
+
+      // Status filter
+      if (args.status) {
+        if (Array.isArray(args.status)) {
+          const placeholders = args.status.map(() => '?').join(', ');
+          sql += ` AND status IN (${placeholders})`;
+          params.push(...args.status);
+        } else {
+          sql += ` AND status = ?`;
+          params.push(args.status);
+        }
+      }
+
+      // Priority filter
+      if (args.priority) {
+        if (Array.isArray(args.priority)) {
+          const placeholders = args.priority.map(() => '?').join(', ');
+          sql += ` AND priority IN (${placeholders})`;
+          params.push(...args.priority);
+        } else {
+          sql += ` AND priority = ?`;
+          params.push(args.priority);
+        }
+      }
+
+      // Date range filter
+      if (args.dateFrom) {
+        sql += ` AND dateRequested >= ?`;
+        params.push(args.dateFrom);
+      }
+      if (args.dateTo) {
+        sql += ` AND dateRequested <= ?`;
+        params.push(args.dateTo);
+      }
+
+      // Category filter
+      if (args.category) {
+        sql += ` AND LOWER(category) LIKE ?`;
+        params.push(`%${args.category.toLowerCase()}%`);
+      }
+
+      // Effort estimate filter
+      if (args.effortEstimate) {
+        if (Array.isArray(args.effortEstimate)) {
+          const placeholders = args.effortEstimate.map(() => '?').join(', ');
+          sql += ` AND effortEstimate IN (${placeholders})`;
+          params.push(...args.effortEstimate);
+        } else {
+          sql += ` AND effortEstimate = ?`;
+          params.push(args.effortEstimate);
+        }
+      }
+
+      this.db.all(sql, params, (err: any, rows: any[]) => {
+        if (err) {
+          reject(new McpError(ErrorCode.InternalError, `Failed to search features: ${err.message}`));
+          return;
+        }
+
+        const features = rows.map((feature: any) => ({
+          type: 'feature',
+          ...feature,
+          acceptanceCriteria: JSON.parse(feature.acceptanceCriteria || '[]'),
+          dependencies: JSON.parse(feature.dependencies || '[]')
+        }));
+
+        resolve(features);
+      });
+    });
+  }
+
+  private async searchImprovements(query: string, args: any): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      let sql = 'SELECT * FROM improvements WHERE 1=1';
+      const params: any[] = [];
+
+      // Text search
+      if (query && query.trim()) {
+        const searchFields = args.searchFields || ['title', 'description', 'category'];
+        const searchConditions = searchFields.map((field: string) => `LOWER(${field}) LIKE ?`).join(' OR ');
+        sql += ` AND (${searchConditions})`;
+        searchFields.forEach(() => params.push(`%${query}%`));
+      }
+
+      // Status filter
+      if (args.status) {
+        if (Array.isArray(args.status)) {
+          const placeholders = args.status.map(() => '?').join(', ');
+          sql += ` AND status IN (${placeholders})`;
+          params.push(...args.status);
+        } else {
+          sql += ` AND status = ?`;
+          params.push(args.status);
+        }
+      }
+
+      // Priority filter
+      if (args.priority) {
+        if (Array.isArray(args.priority)) {
+          const placeholders = args.priority.map(() => '?').join(', ');
+          sql += ` AND priority IN (${placeholders})`;
+          params.push(...args.priority);
+        } else {
+          sql += ` AND priority = ?`;
+          params.push(args.priority);
+        }
+      }
+
+      // Date range filter
+      if (args.dateFrom) {
+        sql += ` AND dateRequested >= ?`;
+        params.push(args.dateFrom);
+      }
+      if (args.dateTo) {
+        sql += ` AND dateRequested <= ?`;
+        params.push(args.dateTo);
+      }
+
+      // Category filter
+      if (args.category) {
+        sql += ` AND LOWER(category) LIKE ?`;
+        params.push(`%${args.category.toLowerCase()}%`);
+      }
+
+      // Effort estimate filter
+      if (args.effortEstimate) {
+        if (Array.isArray(args.effortEstimate)) {
+          const placeholders = args.effortEstimate.map(() => '?').join(', ');
+          sql += ` AND effortEstimate IN (${placeholders})`;
+          params.push(...args.effortEstimate);
+        } else {
+          sql += ` AND effortEstimate = ?`;
+          params.push(args.effortEstimate);
+        }
+      }
+
+      this.db.all(sql, params, (err: any, rows: any[]) => {
+        if (err) {
+          reject(new McpError(ErrorCode.InternalError, `Failed to search improvements: ${err.message}`));
+          return;
+        }
+
+        const improvements = rows.map((improvement: any) => ({
+          type: 'improvement',
+          ...improvement,
+          acceptanceCriteria: JSON.parse(improvement.acceptanceCriteria || '[]'),
+          filesLikelyInvolved: JSON.parse(improvement.filesLikelyInvolved || '[]'),
+          dependencies: JSON.parse(improvement.dependencies || '[]'),
+          benefits: JSON.parse(improvement.benefits || '[]')
+        }));
+
+        resolve(improvements);
+      });
     });
   }
 
@@ -942,6 +1178,259 @@ class ProjectManagementServer {
     });
   }
 
+  private async bulkUpdateBugStatus(args: any) {
+    const { updates } = args;
+    
+    return this.withTransaction(async (db) => {
+      const results: any[] = [];
+      
+      // First, validate all bugs exist
+      for (const update of updates) {
+        const bug = await new Promise((resolve, reject) => {
+          db.get('SELECT * FROM bugs WHERE id = ?', [update.bugId], (err: any, row: any) => {
+            if (err) reject(err);
+            else resolve(row);
+          });
+        });
+        
+        if (!bug) {
+          results.push({
+            bugId: update.bugId,
+            status: 'error',
+            message: `Bug ${update.bugId} not found`
+          });
+          continue;
+        }
+        
+        // Update the bug
+        try {
+          await new Promise((resolve, reject) => {
+            const humanVerified = update.humanVerified !== undefined ? (update.humanVerified ? 1 : 0) : (bug as any).humanVerified;
+            
+            db.run(
+              'UPDATE bugs SET status = ?, humanVerified = ? WHERE id = ?',
+              [update.status, humanVerified, update.bugId],
+              (err: any) => {
+                if (err) reject(err);
+                else resolve(null);
+              }
+            );
+          });
+          
+          results.push({
+            bugId: update.bugId,
+            status: 'success',
+            message: `Updated to ${update.status}`
+          });
+        } catch (error) {
+          results.push({
+            bugId: update.bugId,
+            status: 'error',
+            message: `Failed to update: ${error}`
+          });
+        }
+      }
+      
+      const successCount = results.filter(r => r.status === 'success').length;
+      const errorCount = results.filter(r => r.status === 'error').length;
+      
+      let output = `## Bulk Bug Update Results\n\n`;
+      output += `**Summary**: ${successCount} successful, ${errorCount} failed\n\n`;
+      
+      if (successCount > 0) {
+        output += `**✅ Successful Updates:**\n`;
+        results.filter(r => r.status === 'success').forEach(r => {
+          output += `- ${r.bugId}: ${r.message}\n`;
+        });
+        output += '\n';
+      }
+      
+      if (errorCount > 0) {
+        output += `**❌ Failed Updates:**\n`;
+        results.filter(r => r.status === 'error').forEach(r => {
+          output += `- ${r.bugId}: ${r.message}\n`;
+        });
+      }
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: output
+          }
+        ]
+      };
+    });
+  }
+
+  private async bulkUpdateFeatureStatus(args: any) {
+    const { updates } = args;
+    
+    return this.withTransaction(async (db) => {
+      const results: any[] = [];
+      
+      // First, validate all features exist
+      for (const update of updates) {
+        const feature = await new Promise((resolve, reject) => {
+          db.get('SELECT * FROM features WHERE id = ?', [update.featureId], (err: any, row: any) => {
+            if (err) reject(err);
+            else resolve(row);
+          });
+        });
+        
+        if (!feature) {
+          results.push({
+            featureId: update.featureId,
+            status: 'error',
+            message: `Feature ${update.featureId} not found`
+          });
+          continue;
+        }
+        
+        // Update the feature
+        try {
+          await new Promise((resolve, reject) => {
+            db.run(
+              'UPDATE features SET status = ? WHERE id = ?',
+              [update.status, update.featureId],
+              (err: any) => {
+                if (err) reject(err);
+                else resolve(null);
+              }
+            );
+          });
+          
+          results.push({
+            featureId: update.featureId,
+            status: 'success',
+            message: `Updated to ${update.status}`
+          });
+        } catch (error) {
+          results.push({
+            featureId: update.featureId,
+            status: 'error',
+            message: `Failed to update: ${error}`
+          });
+        }
+      }
+      
+      const successCount = results.filter(r => r.status === 'success').length;
+      const errorCount = results.filter(r => r.status === 'error').length;
+      
+      let output = `## Bulk Feature Update Results\n\n`;
+      output += `**Summary**: ${successCount} successful, ${errorCount} failed\n\n`;
+      
+      if (successCount > 0) {
+        output += `**✅ Successful Updates:**\n`;
+        results.filter(r => r.status === 'success').forEach(r => {
+          output += `- ${r.featureId}: ${r.message}\n`;
+        });
+        output += '\n';
+      }
+      
+      if (errorCount > 0) {
+        output += `**❌ Failed Updates:**\n`;
+        results.filter(r => r.status === 'error').forEach(r => {
+          output += `- ${r.featureId}: ${r.message}\n`;
+        });
+      }
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: output
+          }
+        ]
+      };
+    });
+  }
+
+  private async bulkUpdateImprovementStatus(args: any) {
+    const { updates } = args;
+    
+    return this.withTransaction(async (db) => {
+      const results: any[] = [];
+      
+      // First, validate all improvements exist
+      for (const update of updates) {
+        const improvement = await new Promise((resolve, reject) => {
+          db.get('SELECT * FROM improvements WHERE id = ?', [update.improvementId], (err: any, row: any) => {
+            if (err) reject(err);
+            else resolve(row);
+          });
+        });
+        
+        if (!improvement) {
+          results.push({
+            improvementId: update.improvementId,
+            status: 'error',
+            message: `Improvement ${update.improvementId} not found`
+          });
+          continue;
+        }
+        
+        // Update the improvement
+        try {
+          await new Promise((resolve, reject) => {
+            const dateCompleted = update.dateCompleted || (improvement as any).dateCompleted;
+            
+            db.run(
+              'UPDATE improvements SET status = ?, dateCompleted = ? WHERE id = ?',
+              [update.status, dateCompleted, update.improvementId],
+              (err: any) => {
+                if (err) reject(err);
+                else resolve(null);
+              }
+            );
+          });
+          
+          results.push({
+            improvementId: update.improvementId,
+            status: 'success',
+            message: `Updated to ${update.status}`
+          });
+        } catch (error) {
+          results.push({
+            improvementId: update.improvementId,
+            status: 'error',
+            message: `Failed to update: ${error}`
+          });
+        }
+      }
+      
+      const successCount = results.filter(r => r.status === 'success').length;
+      const errorCount = results.filter(r => r.status === 'error').length;
+      
+      let output = `## Bulk Improvement Update Results\n\n`;
+      output += `**Summary**: ${successCount} successful, ${errorCount} failed\n\n`;
+      
+      if (successCount > 0) {
+        output += `**✅ Successful Updates:**\n`;
+        results.filter(r => r.status === 'success').forEach(r => {
+          output += `- ${r.improvementId}: ${r.message}\n`;
+        });
+        output += '\n';
+      }
+      
+      if (errorCount > 0) {
+        output += `**❌ Failed Updates:**\n`;
+        results.filter(r => r.status === 'error').forEach(r => {
+          output += `- ${r.improvementId}: ${r.message}\n`;
+        });
+      }
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: output
+          }
+        ]
+      };
+    });
+  }
+
   private setupToolHandlers() {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
@@ -1079,14 +1568,47 @@ class ProjectManagementServer {
         },
         {
           name: 'search_items',
-          description: 'Search across bugs, features, and improvements',
+          description: 'Advanced search across bugs, features, and improvements with filtering, sorting, and pagination',
           inputSchema: {
             type: 'object',
             properties: {
-              query: { type: 'string', description: 'Search query' },
-              type: { type: 'string', enum: ['bugs', 'features', 'improvements', 'all'], description: 'Type of items to search' }
-            },
-            required: ['query']
+              query: { type: 'string', description: 'Search query (optional - can search with filters only)' },
+              type: { type: 'string', enum: ['bugs', 'features', 'improvements', 'all'], description: 'Type of items to search' },
+              searchFields: { 
+                type: 'array', 
+                items: { type: 'string' },
+                description: 'Specific fields to search in (e.g., ["title", "description"]). Defaults to title, description, and category/component'
+              },
+              status: { 
+                type: ['string', 'array'], 
+                description: 'Filter by status (single value or array of values)'
+              },
+              priority: { 
+                type: ['string', 'array'], 
+                description: 'Filter by priority (single value or array of values)'
+              },
+              category: { type: 'string', description: 'Filter by category (partial match)' },
+              component: { type: 'string', description: 'Filter by component (partial match, bugs only)' },
+              dateFrom: { type: 'string', description: 'Start date for date range filter (YYYY-MM-DD)' },
+              dateTo: { type: 'string', description: 'End date for date range filter (YYYY-MM-DD)' },
+              effortEstimate: { 
+                type: ['string', 'array'], 
+                description: 'Filter by effort estimate (features/improvements only)'
+              },
+              humanVerified: { type: 'boolean', description: 'Filter by human verification status (bugs only)' },
+              sortBy: { 
+                type: 'string', 
+                enum: ['date', 'priority', 'title', 'status'],
+                description: 'Sort results by field (default: date)'
+              },
+              sortOrder: { 
+                type: 'string', 
+                enum: ['asc', 'desc'],
+                description: 'Sort order (default: desc)'
+              },
+              limit: { type: 'number', description: 'Maximum number of results to return' },
+              offset: { type: 'number', description: 'Number of results to skip (for pagination)' }
+            }
           }
         },
         {
@@ -1136,6 +1658,74 @@ class ProjectManagementServer {
             },
             required: ['itemId']
           }
+        },
+        {
+          name: 'bulk_update_bug_status',
+          description: 'Update multiple bug statuses in a single operation',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              updates: {
+                type: 'array',
+                description: 'Array of bug updates to perform',
+                items: {
+                  type: 'object',
+                  properties: {
+                    bugId: { type: 'string', description: 'Bug ID (e.g., Bug #001)' },
+                    status: { type: 'string', enum: ['Open', 'In Progress', 'Fixed', 'Closed', 'Temporarily Resolved'] },
+                    humanVerified: { type: 'boolean', description: 'Whether human verification is complete' }
+                  },
+                  required: ['bugId', 'status']
+                }
+              }
+            },
+            required: ['updates']
+          }
+        },
+        {
+          name: 'bulk_update_feature_status',
+          description: 'Update multiple feature request statuses in a single operation',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              updates: {
+                type: 'array',
+                description: 'Array of feature updates to perform',
+                items: {
+                  type: 'object',
+                  properties: {
+                    featureId: { type: 'string', description: 'Feature ID (e.g., FR-001)' },
+                    status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Research Phase', 'Partially Implemented', 'Completed', 'Rejected'] }
+                  },
+                  required: ['featureId', 'status']
+                }
+              }
+            },
+            required: ['updates']
+          }
+        },
+        {
+          name: 'bulk_update_improvement_status',
+          description: 'Update multiple improvement statuses in a single operation',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              updates: {
+                type: 'array',
+                description: 'Array of improvement updates to perform',
+                items: {
+                  type: 'object',
+                  properties: {
+                    improvementId: { type: 'string', description: 'Improvement ID (e.g., IMP-001)' },
+                    status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Completed (Awaiting Human Verification)', 'Completed', 'Rejected'] },
+                    dateCompleted: { type: 'string', description: 'Completion date (YYYY-MM-DD)' }
+                  },
+                  required: ['improvementId', 'status']
+                }
+              }
+            },
+            required: ['updates']
+          }
         }
       ]
     }));
@@ -1173,6 +1763,12 @@ class ProjectManagementServer {
             return await this.linkItems(args) as any;
           case 'get_related_items':
             return await this.getRelatedItems(args) as any;
+          case 'bulk_update_bug_status':
+            return await this.bulkUpdateBugStatus(args) as any;
+          case 'bulk_update_feature_status':
+            return await this.bulkUpdateFeatureStatus(args) as any;
+          case 'bulk_update_improvement_status':
+            return await this.bulkUpdateImprovementStatus(args) as any;
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }

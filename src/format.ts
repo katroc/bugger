@@ -195,12 +195,23 @@ interface Bug {
     }).join('\n\n---\n\n');
   }
   
-  export function formatSearchResults(results: any[]): string {
+  export function formatSearchResults(results: any[], metadata?: any): string {
     if (results.length === 0) {
       return "No items found.";
     }
   
-    return results.map(item => {
+    let output = '';
+    
+    // Add metadata header if provided
+    if (metadata) {
+      output += `**Search Results** (${metadata.showing} of ${metadata.total} total)\n`;
+      if (metadata.offset > 0) {
+        output += `*Showing results ${metadata.offset + 1}-${metadata.offset + metadata.showing}*\n`;
+      }
+      output += '\n';
+    }
+    
+    const formattedResults = results.map(item => {
       switch (item.type) {
         case 'bug':
           return formatBugs([item]);
@@ -212,6 +223,8 @@ interface Bug {
           return JSON.stringify(item, null, 2);
       }
     }).join('\n\n---\n\n');
+    
+    return output + formattedResults;
   }
   
   export function formatStatistics(stats: any): string {
