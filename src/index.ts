@@ -8,7 +8,7 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
-import { formatBugs, formatFeatureRequests, formatImprovements, formatSearchResults, formatStatistics } from './format.js';
+import { formatBugs, formatFeatureRequests, formatImprovements, formatSearchResults, formatStatistics, formatBulkUpdateResults } from './format.js';
 import sqlite3 from 'sqlite3';
 
 // Types based on your existing structure
@@ -1231,26 +1231,7 @@ class ProjectManagementServer {
         }
       }
       
-      const successCount = results.filter(r => r.status === 'success').length;
-      const errorCount = results.filter(r => r.status === 'error').length;
-      
-      let output = `## Bulk Bug Update Results\n\n`;
-      output += `**Summary**: ${successCount} successful, ${errorCount} failed\n\n`;
-      
-      if (successCount > 0) {
-        output += `**✅ Successful Updates:**\n`;
-        results.filter(r => r.status === 'success').forEach(r => {
-          output += `- ${r.bugId}: ${r.message}\n`;
-        });
-        output += '\n';
-      }
-      
-      if (errorCount > 0) {
-        output += `**❌ Failed Updates:**\n`;
-        results.filter(r => r.status === 'error').forEach(r => {
-          output += `- ${r.bugId}: ${r.message}\n`;
-        });
-      }
+      const output = formatBulkUpdateResults(results, 'bugs');
       
       return {
         content: [
@@ -1314,26 +1295,7 @@ class ProjectManagementServer {
         }
       }
       
-      const successCount = results.filter(r => r.status === 'success').length;
-      const errorCount = results.filter(r => r.status === 'error').length;
-      
-      let output = `## Bulk Feature Update Results\n\n`;
-      output += `**Summary**: ${successCount} successful, ${errorCount} failed\n\n`;
-      
-      if (successCount > 0) {
-        output += `**✅ Successful Updates:**\n`;
-        results.filter(r => r.status === 'success').forEach(r => {
-          output += `- ${r.featureId}: ${r.message}\n`;
-        });
-        output += '\n';
-      }
-      
-      if (errorCount > 0) {
-        output += `**❌ Failed Updates:**\n`;
-        results.filter(r => r.status === 'error').forEach(r => {
-          output += `- ${r.featureId}: ${r.message}\n`;
-        });
-      }
+      const output = formatBulkUpdateResults(results, 'features');
       
       return {
         content: [
@@ -1388,7 +1350,8 @@ class ProjectManagementServer {
           results.push({
             improvementId: update.improvementId,
             status: 'success',
-            message: `Updated to ${update.status}`
+            message: `Updated to ${update.status}`,
+            dateCompleted: update.dateCompleted
           });
         } catch (error) {
           results.push({
@@ -1399,26 +1362,7 @@ class ProjectManagementServer {
         }
       }
       
-      const successCount = results.filter(r => r.status === 'success').length;
-      const errorCount = results.filter(r => r.status === 'error').length;
-      
-      let output = `## Bulk Improvement Update Results\n\n`;
-      output += `**Summary**: ${successCount} successful, ${errorCount} failed\n\n`;
-      
-      if (successCount > 0) {
-        output += `**✅ Successful Updates:**\n`;
-        results.filter(r => r.status === 'success').forEach(r => {
-          output += `- ${r.improvementId}: ${r.message}\n`;
-        });
-        output += '\n';
-      }
-      
-      if (errorCount > 0) {
-        output += `**❌ Failed Updates:**\n`;
-        results.filter(r => r.status === 'error').forEach(r => {
-          output += `- ${r.improvementId}: ${r.message}\n`;
-        });
-      }
+      const output = formatBulkUpdateResults(results, 'improvements');
       
       return {
         content: [

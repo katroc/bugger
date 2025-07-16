@@ -125,18 +125,20 @@ interface Bug {
       return "No bugs found.";
     }
   
-    return bugs.map(bug => {
-      
-      return `
-${bug.id}: ${bug.title}
-${bug.status} • ${bug.priority} • ${bug.component} • ${bug.dateReported}
-
-${bug.description}
-
-Actual: ${bug.actualBehavior}
-Expected: ${bug.expectedBehavior}
-      `.trim();
-    }).join('\n\n');
+    // Calculate column widths
+    const longestId = Math.max(...bugs.map(b => b.id.length));
+    const longestStatus = Math.max(...bugs.map(b => b.status.length));
+    const longestPriority = Math.max(...bugs.map(b => b.priority.length));
+    const longestComponent = Math.max(...bugs.map(b => b.component.length));
+    const longestTitle = Math.max(...bugs.map(b => b.title.length));
+    
+    let output = '';
+    
+    bugs.forEach(bug => {
+      output += `${bug.id.padEnd(longestId)}  |  ${bug.status.padEnd(longestStatus)}  |  ${bug.priority.padEnd(longestPriority)}  |  ${bug.component.padEnd(longestComponent)}  |  ${bug.dateReported}  |  ${bug.title}\n`;
+    });
+    
+    return output;
   }
   
   export function formatFeatureRequests(features: FeatureRequest[]): string {
@@ -144,17 +146,20 @@ Expected: ${bug.expectedBehavior}
       return "No feature requests found.";
     }
   
-    return features.map(feature => {
-      return `
-${feature.id}: ${feature.title}
-${feature.status} • ${feature.priority} • ${feature.category} • ${feature.dateRequested}
-
-${feature.userStory}
-
-Current: ${feature.currentBehavior}
-Expected: ${feature.expectedBehavior}
-      `.trim();
-    }).join('\n\n');
+    // Calculate column widths
+    const longestId = Math.max(...features.map(f => f.id.length));
+    const longestStatus = Math.max(...features.map(f => f.status.length));
+    const longestPriority = Math.max(...features.map(f => f.priority.length));
+    const longestCategory = Math.max(...features.map(f => f.category.length));
+    const longestTitle = Math.max(...features.map(f => f.title.length));
+    
+    let output = '';
+    
+    features.forEach(feature => {
+      output += `${feature.id.padEnd(longestId)}  |  ${feature.status.padEnd(longestStatus)}  |  ${feature.priority.padEnd(longestPriority)}  |  ${feature.category.padEnd(longestCategory)}  |  ${feature.dateRequested}  |  ${feature.title}\n`;
+    });
+    
+    return output;
   }
   
   export function formatImprovements(improvements: Improvement[]): string {
@@ -162,17 +167,20 @@ Expected: ${feature.expectedBehavior}
       return "No improvements found.";
     }
   
-    return improvements.map(improvement => {
-      return `
-${improvement.id}: ${improvement.title}
-${improvement.status} • ${improvement.priority} • ${improvement.category} • ${improvement.dateRequested}
-
-${improvement.description}
-
-Current: ${improvement.currentState}
-Desired: ${improvement.desiredState}
-      `.trim();
-    }).join('\n\n');
+    // Calculate column widths
+    const longestId = Math.max(...improvements.map(i => i.id.length));
+    const longestStatus = Math.max(...improvements.map(i => i.status.length));
+    const longestPriority = Math.max(...improvements.map(i => i.priority.length));
+    const longestCategory = Math.max(...improvements.map(i => i.category.length));
+    const longestTitle = Math.max(...improvements.map(i => i.title.length));
+    
+    let output = '';
+    
+    improvements.forEach(improvement => {
+      output += `${improvement.id.padEnd(longestId)}  |  ${improvement.status.padEnd(longestStatus)}  |  ${improvement.priority.padEnd(longestPriority)}  |  ${improvement.category.padEnd(longestCategory)}  |  ${improvement.dateRequested}  |  ${improvement.title}\n`;
+    });
+    
+    return output;
   }
   
   export function formatSearchResults(results: any[], metadata?: any): string {
@@ -184,9 +192,9 @@ Desired: ${improvement.desiredState}
     
     // Add metadata header if provided
     if (metadata) {
-      output += `**Search Results** (${metadata.showing} of ${metadata.total} total)\n`;
+      output += `Search Results (${metadata.showing} of ${metadata.total} total)\n`;
       if (metadata.offset > 0) {
-        output += `*Showing results ${metadata.offset + 1}-${metadata.offset + metadata.showing}*\n`;
+        output += `Showing results ${metadata.offset + 1}-${metadata.offset + metadata.showing}\n`;
       }
       output += '\n';
     }
@@ -207,21 +215,61 @@ Desired: ${improvement.desiredState}
     return output + formattedResults;
   }
   
+  export function formatBulkUpdateResults(results: any[], type: 'bugs' | 'features' | 'improvements'): string {
+    const successCount = results.filter(r => r.status === 'success').length;
+    const errorCount = results.filter(r => r.status === 'error').length;
+    
+    let output = '';
+    
+    if (successCount > 0) {
+      const successfulResults = results.filter(r => r.status === 'success');
+      output += `${successfulResults.length} ${type} updated successfully:\n\n`;
+      
+      // Create table-like format
+      const longestId = Math.max(...successfulResults.map(r => r.bugId?.length || r.featureId?.length || r.improvementId?.length || 0));
+      const longestStatus = Math.max(...successfulResults.map(r => r.message?.replace('Updated to ', '').length || 0));
+      
+      successfulResults.forEach(r => {
+        const itemId = r.bugId || r.featureId || r.improvementId || '';
+        const status = r.message?.replace('Updated to ', '') || '';
+        const date = r.dateCompleted || new Date().toISOString().split('T')[0];
+        
+        output += `${itemId.padEnd(longestId)}  |  ${status.padEnd(longestStatus)}  |  ${date}\n`;
+      });
+      
+      if (errorCount > 0) {
+        output += '\n';
+      }
+    }
+    
+    if (errorCount > 0) {
+      output += `${errorCount} ${type} failed to update:\n\n`;
+      results.filter(r => r.status === 'error').forEach(r => {
+        const itemId = r.bugId || r.featureId || r.improvementId || '';
+        output += `${itemId}: ${r.message}\n`;
+      });
+    }
+    
+    return output;
+  }
+
   export function formatStatistics(stats: any): string {
-    let output = '**Project Statistics**\n';
+    let output = 'Project Statistics\n\n';
   
     if (stats.bugs) {
-      output += '\n**Bugs** (' + stats.bugs.total + ' total)\n';
+      output += `Bugs (${stats.bugs.total} total)\n`;
       output += formatStatusAndPriority(stats.bugs);
+      output += '\n';
     }
   
     if (stats.features) {
-      output += '\n**Feature Requests** (' + stats.features.total + ' total)\n';
+      output += `Feature Requests (${stats.features.total} total)\n`;
       output += formatStatusAndPriority(stats.features);
+      output += '\n';
     }
   
     if (stats.improvements) {
-      output += '\n**Improvements** (' + stats.improvements.total + ' total)\n';
+      output += `Improvements (${stats.improvements.total} total)\n`;
       output += formatStatusAndPriority(stats.improvements);
     }
   
@@ -231,17 +279,15 @@ Desired: ${improvement.desiredState}
   function formatStatusAndPriority(category: any): string {
     let output = '';
     if (category.byStatus) {
-      output += '*By Status*:\n';
+      output += 'By Status:\n';
       for (const [status, count] of Object.entries(category.byStatus)) {
-        const statusColor = getStatusColor(status);
-        output += '  - ' + statusColor(status) + ': ' + count + '\n';
+        output += `  ${status}: ${count}\n`;
       }
     }
     if (category.byPriority) {
-      output += '*By Priority*:\n';
+      output += 'By Priority:\n';
       for (const [priority, count] of Object.entries(category.byPriority)) {
-        const priorityColor = getPriorityColor(priority);
-        output += '  - ' + priorityColor(priority) + ': ' + count + '\n';
+        output += `  ${priority}: ${count}\n`;
       }
     }
     return output;
