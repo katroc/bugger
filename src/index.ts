@@ -9,6 +9,8 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { formatBugs, formatFeatureRequests, formatImprovements, formatImprovementsWithContext, formatSearchResults, formatStatistics, formatBulkUpdateResults } from './format.js';
+import { TextAnalyzer, KeywordResult } from './text-analysis.js';
+import { ContextCollectionEngine, TaskAnalysisInput, ContextCollectionResult, CodeContext } from './context-collection-engine.js';
 import sqlite3 from 'sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -70,9 +72,78 @@ interface Improvement {
   benefits?: string[];
 }
 
+// New interfaces for code context functionality
+interface TaskWithContext {
+  codeContexts: CodeContext[];
+}
+
+interface AnalysisResult {
+  keywords: string[];
+  entities: string[];
+  intent: string;
+  confidence: number;
+}
+
+
+
+interface EntityResult {
+  entity: string;
+  type: 'function' | 'class' | 'file' | 'variable';
+  confidence: number;
+}
+
+interface IntentResult {
+  intent: string;
+  confidence: number;
+  category: string;
+}
+
+interface FileMatch {
+  filePath: string;
+  relevanceScore: number;
+  matchedKeywords: string[];
+}
+
+interface CodeSection {
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  content: string;
+  relevanceScore: number;
+}
+
+interface FunctionMatch {
+  name: string;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  signature: string;
+}
+
+interface PatternMatch {
+  pattern: string;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  similarity: number;
+}
+
+interface ArchitecturalContext {
+  configFiles: string[];
+  dependencies: string[];
+  relationships: Array<{
+    from: string;
+    to: string;
+    type: string;
+  }>;
+}
+
+
 class ProjectManagementServer {
   private server: Server;
   private db!: sqlite3.Database;
+  private textAnalyzer: TextAnalyzer;
+  private contextEngine: ContextCollectionEngine;
 
   constructor() {
     this.server = new Server(
@@ -85,6 +156,8 @@ class ProjectManagementServer {
       }
     );
 
+    this.textAnalyzer = new TextAnalyzer();
+    this.contextEngine = new ContextCollectionEngine();
     this.setupToolHandlers();
   }
 
@@ -161,6 +234,32 @@ class ProjectManagementServer {
               relationshipType TEXT NOT NULL,
               dateCreated TEXT NOT NULL,
               UNIQUE(fromItem, toItem, relationshipType)
+            );
+
+            CREATE TABLE IF NOT EXISTS code_contexts (
+              id TEXT PRIMARY KEY,
+              task_id TEXT NOT NULL,
+              task_type TEXT NOT NULL,
+              context_type TEXT NOT NULL,
+              source TEXT NOT NULL,
+              file_path TEXT NOT NULL,
+              start_line INTEGER,
+              end_line INTEGER,
+              content TEXT,
+              description TEXT NOT NULL,
+              relevance_score REAL NOT NULL,
+              keywords TEXT,
+              date_collected TEXT NOT NULL,
+              date_last_checked TEXT,
+              is_stale INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS context_analysis_cache (
+              id TEXT PRIMARY KEY,
+              content_hash TEXT NOT NULL,
+              analysis_result TEXT NOT NULL,
+              date_created TEXT NOT NULL,
+              expiry_date TEXT NOT NULL
             );
           `, (err) => {
             if (err) {
@@ -585,35 +684,9 @@ class ProjectManagementServer {
   }
 
   private extractKeywords(text: string): string[] {
-    // Simple keyword extraction - remove common words and keep significant terms
-    const commonWords = new Set([
-      'the', 'and', 'or', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with', 'by',
-      'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
-      'do', 'does', 'did', 'will', 'would', 'should', 'could', 'can', 'may', 'might',
-      'must', 'shall', 'should', 'this', 'that', 'these', 'those', 'it', 'they',
-      'we', 'you', 'he', 'she', 'him', 'her', 'them', 'their', 'our', 'your',
-      'of', 'from', 'as', 'but', 'not', 'no', 'yes', 'all', 'any', 'some', 'many',
-      'few', 'most', 'other', 'another', 'such', 'what', 'which', 'who', 'whom',
-      'whose', 'when', 'where', 'why', 'how'
-    ]);
-
-    // Extract words, filter common words, and keep words longer than 3 characters
-    const words = text.toLowerCase()
-      .replace(/[^\w\s]/g, ' ')
-      .split(/\s+/)
-      .filter(word => word.length > 3 && !commonWords.has(word));
-
-    // Count word frequency
-    const wordCount = new Map<string, number>();
-    words.forEach(word => {
-      wordCount.set(word, (wordCount.get(word) || 0) + 1);
-    });
-
-    // Sort by frequency and take top 10
-    return Array.from(wordCount.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(entry => entry[0]);
+    // Use the enhanced TextAnalyzer for keyword extraction
+    const keywordResults = this.textAnalyzer.extractKeywords(text, 10);
+    return keywordResults.map(result => result.keyword);
   }
 
   private async listImprovements(args: any) {
@@ -1571,6 +1644,348 @@ class ProjectManagementServer {
     });
   }
 
+  private async collectContextForTask(args: any) {
+    try {
+      const taskInput: TaskAnalysisInput = {
+        taskId: args.taskId,
+        taskType: args.taskType,
+        title: args.title,
+        description: args.description,
+        currentState: args.currentState,
+        desiredState: args.desiredState,
+        expectedBehavior: args.expectedBehavior,
+        actualBehavior: args.actualBehavior,
+        filesLikelyInvolved: args.filesLikelyInvolved || [],
+        keywords: args.keywords || [],
+        entities: args.entities || []
+      };
+
+      const result = await this.contextEngine.collectContexts(taskInput);
+      
+      // Store contexts in database
+      await this.storeContextsInDatabase(result.contexts);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: this.formatContextCollectionResult(result)
+          }
+        ]
+      };
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to collect context: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async getTaskContexts(args: any) {
+    try {
+      const taskId = args.taskId;
+      const contexts = await this.getContextsFromDatabase(taskId);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: this.formatContexts(contexts)
+          }
+        ]
+      };
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to get contexts: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async checkContextFreshness(args: any) {
+    try {
+      const taskId = args.taskId;
+      const contexts = await this.getContextsFromDatabase(taskId);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Context freshness checking not yet implemented - found ${contexts.length} contexts for task ${taskId}`
+          }
+        ]
+      };
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to check freshness: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async addManualContext(args: any) {
+    try {
+      const context: CodeContext = {
+        id: `${args.taskId}_manual_${Date.now()}`,
+        taskId: args.taskId,
+        taskType: args.taskType,
+        contextType: args.contextType || 'snippet',
+        source: 'manual',
+        filePath: args.filePath,
+        startLine: args.startLine,
+        endLine: args.endLine,
+        content: args.content,
+        description: args.description,
+        relevanceScore: args.relevanceScore || 0.8,
+        keywords: args.keywords || [],
+        dateCollected: new Date().toISOString(),
+        isStale: false
+      };
+
+      await this.storeContextsInDatabase([context]);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Added manual context: ${context.description}`
+          }
+        ]
+      };
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to add manual context: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async updateContext(args: any) {
+    try {
+      const contextId = args.contextId;
+      const updates = args.updates;
+      
+      await this.updateContextInDatabase(contextId, updates);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Updated context: ${contextId}`
+          }
+        ]
+      };
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to update context: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async removeContext(args: any) {
+    try {
+      const contextId = args.contextId;
+      
+      await this.removeContextFromDatabase(contextId);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Removed context: ${contextId}`
+          }
+        ]
+      };
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to remove context: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async storeContextsInDatabase(contexts: CodeContext[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO code_contexts 
+        (id, task_id, task_type, context_type, source, file_path, start_line, end_line, content, description, relevance_score, keywords, date_collected, date_last_checked, is_stale)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const context of contexts) {
+        stmt.run([
+          context.id,
+          context.taskId,
+          context.taskType,
+          context.contextType,
+          context.source,
+          context.filePath,
+          context.startLine,
+          context.endLine,
+          context.content,
+          context.description,
+          context.relevanceScore,
+          JSON.stringify(context.keywords),
+          context.dateCollected,
+          context.dateLastChecked,
+          context.isStale ? 1 : 0
+        ]);
+      }
+
+      stmt.finalize((err) => {
+        if (err) {
+          reject(new McpError(ErrorCode.InternalError, `Failed to store contexts: ${err.message}`));
+        } else {
+          resolve();
+        }
+      });
+    });
+  }
+
+  private async getContextsFromDatabase(taskId: string): Promise<CodeContext[]> {
+    return new Promise((resolve, reject) => {
+      this.db.all(
+        'SELECT * FROM code_contexts WHERE task_id = ? ORDER BY relevance_score DESC',
+        [taskId],
+        (err: any, rows: any[]) => {
+          if (err) {
+            reject(new McpError(ErrorCode.InternalError, `Failed to get contexts: ${err.message}`));
+            return;
+          }
+
+          const contexts = rows.map((row: any) => ({
+            id: row.id,
+            taskId: row.task_id,
+            taskType: row.task_type,
+            contextType: row.context_type,
+            source: row.source,
+            filePath: row.file_path,
+            startLine: row.start_line,
+            endLine: row.end_line,
+            content: row.content,
+            description: row.description,
+            relevanceScore: row.relevance_score,
+            keywords: JSON.parse(row.keywords || '[]'),
+            dateCollected: row.date_collected,
+            dateLastChecked: row.date_last_checked,
+            isStale: !!row.is_stale
+          }));
+
+          resolve(contexts);
+        }
+      );
+    });
+  }
+
+  private async updateContextInDatabase(contextId: string, updates: any): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const fields = [];
+      const values = [];
+
+      for (const [key, value] of Object.entries(updates)) {
+        const dbKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+        fields.push(`${dbKey} = ?`);
+        values.push(value);
+      }
+
+      values.push(contextId);
+
+      this.db.run(
+        `UPDATE code_contexts SET ${fields.join(', ')} WHERE id = ?`,
+        values,
+        (err: any) => {
+          if (err) {
+            reject(new McpError(ErrorCode.InternalError, `Failed to update context: ${err.message}`));
+          } else {
+            resolve();
+          }
+        }
+      );
+    });
+  }
+
+  private async removeContextFromDatabase(contextId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.db.run(
+        'DELETE FROM code_contexts WHERE id = ?',
+        [contextId],
+        (err: any) => {
+          if (err) {
+            reject(new McpError(ErrorCode.InternalError, `Failed to remove context: ${err.message}`));
+          } else {
+            resolve();
+          }
+        }
+      );
+    });
+  }
+
+  private formatContextCollectionResult(result: ContextCollectionResult): string {
+    let output = `# Context Collection Result\n\n`;
+    
+    output += `## Summary\n`;
+    output += `- Total contexts: ${result.summary.totalContexts}\n`;
+    output += `- High relevance: ${result.summary.highRelevanceContexts}\n`;
+    output += `- Medium relevance: ${result.summary.mediumRelevanceContexts}\n`;
+    output += `- Low relevance: ${result.summary.lowRelevanceContexts}\n`;
+    output += `- Average relevance: ${result.summary.averageRelevanceScore.toFixed(2)}\n`;
+    output += `- Processing time: ${result.summary.processingTimeMs}ms\n`;
+    output += `- Files analyzed: ${result.summary.filesAnalyzed}\n`;
+    output += `- Patterns found: ${result.summary.patternsFound}\n`;
+    output += `- Dependencies analyzed: ${result.summary.dependenciesAnalyzed}\n\n`;
+    
+    if (result.contexts.length > 0) {
+      output += `## Contexts\n`;
+      for (const context of result.contexts) {
+        output += `### ${context.description}\n`;
+        output += `- **File**: ${context.filePath}\n`;
+        output += `- **Lines**: ${context.startLine || 'N/A'} - ${context.endLine || 'N/A'}\n`;
+        output += `- **Relevance**: ${context.relevanceScore.toFixed(2)}\n`;
+        output += `- **Keywords**: ${context.keywords.join(', ')}\n`;
+        if (context.content) {
+          output += `- **Content**:\n\`\`\`\n${context.content.slice(0, 500)}${context.content.length > 500 ? '...' : ''}\n\`\`\`\n`;
+        }
+        output += `\n`;
+      }
+    }
+    
+    if (result.recommendations.length > 0) {
+      output += `## Recommendations\n`;
+      for (const rec of result.recommendations) {
+        output += `- ${rec}\n`;
+      }
+      output += `\n`;
+    }
+    
+    if (result.potentialIssues.length > 0) {
+      output += `## Potential Issues\n`;
+      for (const issue of result.potentialIssues) {
+        output += `- ${issue}\n`;
+      }
+      output += `\n`;
+    }
+    
+    return output;
+  }
+
+  private formatContexts(contexts: CodeContext[]): string {
+    if (contexts.length === 0) {
+      return 'No contexts found for this task.';
+    }
+
+    let output = `# Task Contexts (${contexts.length})\n\n`;
+    
+    for (const context of contexts) {
+      output += `## ${context.description}\n`;
+      output += `- **ID**: ${context.id}\n`;
+      output += `- **Type**: ${context.contextType}\n`;
+      output += `- **Source**: ${context.source}\n`;
+      output += `- **File**: ${context.filePath}\n`;
+      if (context.startLine) {
+        output += `- **Lines**: ${context.startLine} - ${context.endLine}\n`;
+      }
+      output += `- **Relevance**: ${context.relevanceScore.toFixed(2)}\n`;
+      output += `- **Keywords**: ${context.keywords.join(', ')}\n`;
+      output += `- **Date Collected**: ${context.dateCollected}\n`;
+      if (context.isStale) {
+        output += `- **Status**: ⚠️ STALE\n`;
+      } else {
+        output += `- **Status**: ✅ Fresh\n`;
+      }
+      
+      if (context.content) {
+        output += `\n\`\`\`\n${context.content.slice(0, 1000)}${context.content.length > 1000 ? '...' : ''}\n\`\`\`\n`;
+      }
+      output += `\n`;
+    }
+    
+    return output;
+  }
+
+
   private setupToolHandlers() {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
@@ -1867,6 +2282,92 @@ class ProjectManagementServer {
             },
             required: ['updates']
           }
+        },
+        {
+          name: 'collect_task_context',
+          description: 'Collect relevant code context for a task using AI analysis',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string', description: 'Task ID' },
+              taskType: { type: 'string', enum: ['bug', 'feature', 'improvement'], description: 'Type of task' },
+              title: { type: 'string', description: 'Task title' },
+              description: { type: 'string', description: 'Task description' },
+              currentState: { type: 'string', description: 'Current state (for improvements)' },
+              desiredState: { type: 'string', description: 'Desired state (for improvements)' },
+              expectedBehavior: { type: 'string', description: 'Expected behavior (for bugs)' },
+              actualBehavior: { type: 'string', description: 'Actual behavior (for bugs)' },
+              filesLikelyInvolved: { type: 'array', items: { type: 'string' }, description: 'Files likely involved' },
+              keywords: { type: 'array', items: { type: 'string' }, description: 'Additional keywords' },
+              entities: { type: 'array', items: { type: 'string' }, description: 'Additional entities' }
+            },
+            required: ['taskId', 'taskType', 'title', 'description']
+          }
+        },
+        {
+          name: 'get_task_contexts',
+          description: 'Get all contexts for a specific task',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string', description: 'Task ID to get contexts for' }
+            },
+            required: ['taskId']
+          }
+        },
+        {
+          name: 'check_context_freshness',
+          description: 'Check the freshness of contexts for a task',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string', description: 'Task ID to check contexts for' }
+            },
+            required: ['taskId']
+          }
+        },
+        {
+          name: 'add_manual_context',
+          description: 'Add a manual context to a task',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string', description: 'Task ID' },
+              taskType: { type: 'string', enum: ['bug', 'feature', 'improvement'], description: 'Type of task' },
+              contextType: { type: 'string', enum: ['snippet', 'file_reference', 'dependency', 'pattern'], description: 'Type of context' },
+              filePath: { type: 'string', description: 'Path to the file' },
+              startLine: { type: 'number', description: 'Start line number' },
+              endLine: { type: 'number', description: 'End line number' },
+              content: { type: 'string', description: 'Context content' },
+              description: { type: 'string', description: 'Context description' },
+              relevanceScore: { type: 'number', description: 'Relevance score (0-1)' },
+              keywords: { type: 'array', items: { type: 'string' }, description: 'Related keywords' }
+            },
+            required: ['taskId', 'taskType', 'filePath', 'description']
+          }
+        },
+        {
+          name: 'update_context',
+          description: 'Update an existing context',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              contextId: { type: 'string', description: 'Context ID to update' },
+              updates: { type: 'object', description: 'Updates to apply' }
+            },
+            required: ['contextId', 'updates']
+          }
+        },
+        {
+          name: 'remove_context',
+          description: 'Remove a context from a task',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              contextId: { type: 'string', description: 'Context ID to remove' }
+            },
+            required: ['contextId']
+          }
         }
       ]
     }));
@@ -1910,6 +2411,18 @@ class ProjectManagementServer {
             return await this.bulkUpdateFeatureStatus(args) as any;
           case 'bulk_update_improvement_status':
             return await this.bulkUpdateImprovementStatus(args) as any;
+          case 'collect_task_context':
+            return await this.collectContextForTask(args) as any;
+          case 'get_task_contexts':
+            return await this.getTaskContexts(args) as any;
+          case 'check_context_freshness':
+            return await this.checkContextFreshness(args) as any;
+          case 'add_manual_context':
+            return await this.addManualContext(args) as any;
+          case 'update_context':
+            return await this.updateContext(args) as any;
+          case 'remove_context':
+            return await this.removeContext(args) as any;
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }

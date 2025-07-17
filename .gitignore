@@ -1,7 +1,7 @@
 data/
 node_modules/
 dist/
-
+.claude/
 # Generic ignored files/folders
 # OS generated files
 .DS_Store
