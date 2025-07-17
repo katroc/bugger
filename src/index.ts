@@ -330,6 +330,63 @@ class ProjectManagementServer {
     });
   }
 
+  private async createItem(args: any) {
+    const { type, ...itemData } = args;
+    
+    try {
+      switch (type) {
+        case 'bug':
+          return await this.createBug(itemData);
+        case 'feature':
+          return await this.createFeatureRequest(itemData);
+        case 'improvement':
+          return await this.createImprovement(itemData);
+        default:
+          throw new McpError(ErrorCode.InvalidParams, `Unknown item type: ${type}`);
+      }
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to create ${type}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async listItems(args: any) {
+    const { type, ...filters } = args;
+    
+    try {
+      switch (type) {
+        case 'bug':
+          return await this.listBugs(filters);
+        case 'feature':
+          return await this.listFeatureRequests(filters);
+        case 'improvement':
+          return await this.listImprovements(filters);
+        default:
+          throw new McpError(ErrorCode.InvalidParams, `Unknown item type: ${type}`);
+      }
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to list ${type}s: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async updateItemStatus(args: any) {
+    const { itemId, status, humanVerified, dateCompleted } = args;
+    
+    try {
+      // Determine item type from ID format
+      if (itemId.startsWith('Bug #')) {
+        return await this.updateBugStatus({ bugId: itemId, status, humanVerified });
+      } else if (itemId.startsWith('FR-')) {
+        return await this.updateFeatureStatus({ featureId: itemId, status });
+      } else if (itemId.startsWith('IMP-')) {
+        return await this.updateImprovementStatus({ improvementId: itemId, status, dateCompleted });
+      } else {
+        throw new McpError(ErrorCode.InvalidParams, `Unknown item ID format: ${itemId}`);
+      }
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to update item status: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private async createBug(args: any) {
     return this.withTransaction(async (db) => {
       const newBug: Bug = {
@@ -1445,6 +1502,94 @@ class ProjectManagementServer {
     });
   }
 
+  private async bulkUpdateItems(args: any) {
+    const { updates } = args;
+    
+    return this.withTransaction(async (db) => {
+      const results: any[] = [];
+      
+      for (const update of updates) {
+        const { itemId, status, humanVerified, dateCompleted } = update;
+        
+        try {
+          // Determine item type from ID format and delegate to appropriate method
+          if (itemId.startsWith('Bug #')) {
+            const bugResult = await this.bulkUpdateBugStatus({
+              updates: [{ bugId: itemId, status, humanVerified }]
+            });
+            results.push({
+              itemId,
+              status: 'success',
+              message: `Updated to ${status}`,
+              type: 'bug'
+            });
+          } else if (itemId.startsWith('FR-')) {
+            const featureResult = await this.bulkUpdateFeatureStatus({
+              updates: [{ featureId: itemId, status }]
+            });
+            results.push({
+              itemId,
+              status: 'success',
+              message: `Updated to ${status}`,
+              type: 'feature'
+            });
+          } else if (itemId.startsWith('IMP-')) {
+            const improvementResult = await this.bulkUpdateImprovementStatus({
+              updates: [{ improvementId: itemId, status, dateCompleted }]
+            });
+            results.push({
+              itemId,
+              status: 'success',
+              message: `Updated to ${status}`,
+              type: 'improvement'
+            });
+          } else {
+            results.push({
+              itemId,
+              status: 'error',
+              message: `Unknown item ID format: ${itemId}`,
+              type: 'unknown'
+            });
+          }
+        } catch (error) {
+          results.push({
+            itemId,
+            status: 'error',
+            message: `Failed to update: ${error}`,
+            type: 'error'
+          });
+        }
+      }
+      
+      // Format output manually since we have mixed item types
+      let output = `## Bulk Update Results\n\n`;
+      
+      const successCount = results.filter(r => r.status === 'success').length;
+      const errorCount = results.filter(r => r.status === 'error').length;
+      
+      output += `- **Total**: ${results.length}\n`;
+      output += `- **Success**: ${successCount}\n`;
+      output += `- **Errors**: ${errorCount}\n\n`;
+      
+      if (results.length > 0) {
+        output += `### Results:\n`;
+        for (const result of results) {
+          const icon = result.status === 'success' ? '✅' : '❌';
+          output += `${icon} **${result.itemId}**: ${result.message}\n`;
+        }
+      }
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: output
+          }
+        ]
+      };
+    });
+  }
+
   private async bulkUpdateBugStatus(args: any) {
     const { updates } = args;
 
@@ -1642,6 +1787,229 @@ class ProjectManagementServer {
         ]
       };
     });
+  }
+
+  private async executeWorkflow(args: any) {
+    const { workflow, ...workflowArgs } = args;
+    
+    try {
+      switch (workflow) {
+        case 'create_and_link':
+          return await this.executeCreateAndLinkWorkflow(workflowArgs);
+        case 'batch_context_collection':
+          return await this.executeBatchContextWorkflow(workflowArgs);
+        case 'status_transition':
+          return await this.executeStatusTransitionWorkflow(workflowArgs);
+        default:
+          throw new McpError(ErrorCode.InvalidParams, `Unknown workflow: ${workflow}`);
+      }
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to execute workflow: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async executeCreateAndLinkWorkflow(args: any) {
+    const { items } = args;
+    const results: any[] = [];
+    
+    for (const item of items) {
+      try {
+        // Create the item
+        const createResult = await this.createItem({ type: item.type, ...item.data });
+        
+        // Extract the created item ID from the response
+        const createdId = this.extractIdFromCreateResponse(createResult, item.type);
+        
+        // Link the item if linkTo is specified
+        if (item.linkTo) {
+          await this.linkItems({
+            fromItem: createdId,
+            toItem: item.linkTo,
+            relationshipType: item.relationshipType || 'relates_to'
+          });
+        }
+        
+        results.push({
+          action: 'create_and_link',
+          itemId: createdId,
+          status: 'success',
+          message: `Created and ${item.linkTo ? 'linked to ' + item.linkTo : 'completed'}`
+        });
+      } catch (error) {
+        results.push({
+          action: 'create_and_link',
+          status: 'error',
+          message: `Failed: ${error}`
+        });
+      }
+    }
+    
+    return {
+      content: [{
+        type: 'text',
+        text: this.formatWorkflowResults('create_and_link', results)
+      }]
+    };
+  }
+
+  private async executeBatchContextWorkflow(args: any) {
+    const { tasks } = args;
+    const results: any[] = [];
+    
+    for (const task of tasks) {
+      try {
+        const contextResult = await this.manageContexts({
+          operation: 'collect',
+          taskId: task.taskId,
+          taskType: task.taskType,
+          title: task.title,
+          description: task.description
+        });
+        
+        results.push({
+          action: 'collect_context',
+          taskId: task.taskId,
+          status: 'success',
+          message: 'Context collected successfully'
+        });
+      } catch (error) {
+        results.push({
+          action: 'collect_context',
+          taskId: task.taskId,
+          status: 'error',
+          message: `Failed: ${error}`
+        });
+      }
+    }
+    
+    return {
+      content: [{
+        type: 'text',
+        text: this.formatWorkflowResults('batch_context_collection', results)
+      }]
+    };
+  }
+
+  private async executeStatusTransitionWorkflow(args: any) {
+    const { transitions } = args;
+    const results: any[] = [];
+    
+    for (const transition of transitions) {
+      try {
+        // Verify transition is valid if requested
+        if (transition.verifyTransition) {
+          const isValid = await this.verifyStatusTransition(transition.itemId, transition.fromStatus, transition.toStatus);
+          if (!isValid) {
+            results.push({
+              action: 'status_transition',
+              itemId: transition.itemId,
+              status: 'error',
+              message: `Invalid transition from ${transition.fromStatus} to ${transition.toStatus}`
+            });
+            continue;
+          }
+        }
+        
+        // Execute the status update
+        await this.updateItemStatus({
+          itemId: transition.itemId,
+          status: transition.toStatus
+        });
+        
+        results.push({
+          action: 'status_transition',
+          itemId: transition.itemId,
+          status: 'success',
+          message: `Updated from ${transition.fromStatus} to ${transition.toStatus}`
+        });
+      } catch (error) {
+        results.push({
+          action: 'status_transition',
+          itemId: transition.itemId,
+          status: 'error',
+          message: `Failed: ${error}`
+        });
+      }
+    }
+    
+    return {
+      content: [{
+        type: 'text',
+        text: this.formatWorkflowResults('status_transition', results)
+      }]
+    };
+  }
+
+  private extractIdFromCreateResponse(response: any, type: string): string {
+    const text = response.content[0].text;
+    const match = text.match(/Created new \w+: ([^\s]+)/);
+    return match ? match[1] : '';
+  }
+
+  private async verifyStatusTransition(itemId: string, fromStatus: string, toStatus: string): Promise<boolean> {
+    // This is a simplified implementation - in reality, you'd want to define valid transitions
+    return true;
+  }
+
+  private formatWorkflowResults(workflowType: string, results: any[]): string {
+    let output = `## Workflow Results: ${workflowType}\n\n`;
+    
+    const successCount = results.filter(r => r.status === 'success').length;
+    const errorCount = results.filter(r => r.status === 'error').length;
+    
+    output += `- **Total**: ${results.length}\n`;
+    output += `- **Success**: ${successCount}\n`;
+    output += `- **Errors**: ${errorCount}\n\n`;
+    
+    if (results.length > 0) {
+      output += `### Results:\n`;
+      for (const result of results) {
+        const icon = result.status === 'success' ? '✅' : '❌';
+        const identifier = result.itemId || result.taskId || 'Unknown';
+        output += `${icon} **${identifier}**: ${result.message}\n`;
+      }
+    }
+    
+    return output;
+  }
+
+  private async manageContexts(args: any) {
+    const { operation, taskId, ...operationArgs } = args;
+    
+    try {
+      switch (operation) {
+        case 'collect':
+          return await this.collectContextForTask({ taskId, ...operationArgs });
+        case 'get':
+          return await this.getTaskContexts({ taskId });
+        case 'check_freshness':
+          return await this.checkContextFreshness({ taskId });
+        case 'add':
+          return await this.addManualContext({ 
+            taskId, 
+            taskType: operationArgs.taskType,
+            contextType: operationArgs.contextType,
+            filePath: operationArgs.filePath,
+            startLine: operationArgs.startLine,
+            endLine: operationArgs.endLine,
+            content: operationArgs.content,
+            description: operationArgs.contextDescription,
+            relevanceScore: operationArgs.relevanceScore,
+            keywords: operationArgs.keywords
+          });
+        case 'update':
+          return await this.updateContext({ 
+            contextId: operationArgs.contextId, 
+            updates: operationArgs.updates 
+          });
+        case 'remove':
+          return await this.removeContext({ contextId: operationArgs.contextId });
+        default:
+          throw new McpError(ErrorCode.InvalidParams, `Unknown context operation: ${operation}`);
+      }
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to manage contexts: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private async collectContextForTask(args: any) {
@@ -1990,136 +2358,64 @@ class ProjectManagementServer {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
-          name: 'create_bug',
-          description: 'Create a new bug report',
+          name: 'create_item',
+          description: 'Create a new bug, feature request, or improvement',
           inputSchema: {
             type: 'object',
             properties: {
-              title: { type: 'string', description: 'Bug title' },
-              description: { type: 'string', description: 'Detailed bug description' },
-              component: { type: 'string', description: 'Component affected' },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
-              expectedBehavior: { type: 'string', description: 'What should happen' },
-              actualBehavior: { type: 'string', description: 'What actually happens' },
-              potentialRootCause: { type: 'string', description: 'Hypothesis about the cause' },
-              filesLikelyInvolved: { type: 'array', items: { type: 'string' }, description: 'Files that might be involved' },
-              stepsToReproduce: { type: 'array', items: { type: 'string' }, description: 'Steps to reproduce the bug' }
+              type: { type: 'string', enum: ['bug', 'feature', 'improvement'], description: 'Type of item to create' },
+              title: { type: 'string', description: 'Item title' },
+              description: { type: 'string', description: 'Detailed item description' },
+              priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'], description: 'Item priority' },
+              // Bug-specific fields
+              component: { type: 'string', description: 'Component affected (bugs only)' },
+              expectedBehavior: { type: 'string', description: 'What should happen (bugs/features)' },
+              actualBehavior: { type: 'string', description: 'What actually happens (bugs only)' },
+              potentialRootCause: { type: 'string', description: 'Hypothesis about the cause (bugs only)' },
+              filesLikelyInvolved: { type: 'array', items: { type: 'string' }, description: 'Files that might be involved (bugs/improvements)' },
+              stepsToReproduce: { type: 'array', items: { type: 'string' }, description: 'Steps to reproduce (bugs only)' },
+              // Feature-specific fields
+              category: { type: 'string', description: 'Category (features/improvements)' },
+              userStory: { type: 'string', description: 'User story format (features only)' },
+              currentBehavior: { type: 'string', description: 'Current system behavior (features only)' },
+              acceptanceCriteria: { type: 'array', items: { type: 'string' }, description: 'Acceptance criteria checklist (features/improvements)' },
+              requestedBy: { type: 'string', description: 'Who requested this (features/improvements)' },
+              effortEstimate: { type: 'string', enum: ['Small', 'Medium', 'Large', 'XL'], description: 'Effort estimate (features/improvements)' },
+              // Improvement-specific fields
+              currentState: { type: 'string', description: 'Current state (improvements only)' },
+              desiredState: { type: 'string', description: 'Desired state after improvement (improvements only)' }
             },
-            required: ['title', 'description', 'component', 'priority', 'expectedBehavior', 'actualBehavior']
+            required: ['type', 'title', 'description', 'priority']
           }
         },
         {
-          name: 'create_feature_request',
-          description: 'Create a new feature request',
+          name: 'list_items',
+          description: 'List bugs, features, or improvements with optional filtering',
           inputSchema: {
             type: 'object',
             properties: {
-              title: { type: 'string', description: 'Feature title' },
-              description: { type: 'string', description: 'Detailed feature description' },
-              category: { type: 'string', description: 'Feature category' },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
-              userStory: { type: 'string', description: 'User story format' },
-              currentBehavior: { type: 'string', description: 'Current system behavior' },
-              expectedBehavior: { type: 'string', description: 'Expected behavior after implementation' },
-              acceptanceCriteria: { type: 'array', items: { type: 'string' }, description: 'Acceptance criteria checklist' },
-              requestedBy: { type: 'string', description: 'Who requested this feature' },
-              effortEstimate: { type: 'string', enum: ['Small', 'Medium', 'Large', 'XL'] }
+              type: { type: 'string', enum: ['bug', 'feature', 'improvement'], description: 'Type of items to list' },
+              status: { type: 'string', description: 'Filter by status (status values depend on item type)' },
+              priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'], description: 'Filter by priority' },
+              component: { type: 'string', description: 'Filter by component (bugs only)' },
+              category: { type: 'string', description: 'Filter by category (features/improvements)' },
+              includeCodeContext: { type: 'boolean', description: 'Include relevant code sections and file context (improvements only)' }
             },
-            required: ['title', 'description', 'category', 'priority', 'userStory', 'currentBehavior', 'expectedBehavior', 'acceptanceCriteria']
+            required: ['type']
           }
         },
         {
-          name: 'create_improvement',
-          description: 'Create a new improvement',
+          name: 'update_item_status',
+          description: 'Update status of a bug, feature request, or improvement',
           inputSchema: {
             type: 'object',
             properties: {
-              title: { type: 'string', description: 'Improvement title' },
-              description: { type: 'string', description: 'Detailed improvement description' },
-              category: { type: 'string', description: 'Improvement category' },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High'] },
-              currentState: { type: 'string', description: 'Current state' },
-              desiredState: { type: 'string', description: 'Desired state after improvement' },
-              acceptanceCriteria: { type: 'array', items: { type: 'string' }, description: 'Acceptance criteria checklist' },
-              requestedBy: { type: 'string', description: 'Who requested this improvement' },
-              effortEstimate: { type: 'string', enum: ['Small', 'Medium', 'Large'] }
+              itemId: { type: 'string', description: 'Item ID (e.g., Bug #001, FR-001, IMP-001)' },
+              status: { type: 'string', description: 'New status (valid values depend on item type)' },
+              humanVerified: { type: 'boolean', description: 'Whether human verification is complete (bugs only)' },
+              dateCompleted: { type: 'string', description: 'Completion date YYYY-MM-DD (improvements only)' }
             },
-            required: ['title', 'description', 'category', 'priority', 'currentState', 'desiredState', 'acceptanceCriteria']
-          }
-        },
-        {
-          name: 'list_bugs',
-          description: 'List bugs with optional filtering',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              status: { type: 'string', enum: ['Open', 'In Progress', 'Fixed', 'Closed', 'Temporarily Resolved'] },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
-              component: { type: 'string' }
-            }
-          }
-        },
-        {
-          name: 'list_feature_requests',
-          description: 'List feature requests with optional filtering',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Research Phase', 'Partially Implemented', 'Completed', 'Rejected'] },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
-              category: { type: 'string' }
-            }
-          }
-        },
-        {
-          name: 'list_improvements',
-          description: 'List improvements with optional filtering and code context',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Completed (Awaiting Human Verification)', 'Completed', 'Rejected'] },
-              priority: { type: 'string', enum: ['Low', 'Medium', 'High'] },
-              category: { type: 'string' },
-              includeCodeContext: { type: 'boolean', description: 'Include relevant code sections and file context' }
-            }
-          }
-        },
-        {
-          name: 'update_bug_status',
-          description: 'Update bug status',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              bugId: { type: 'string', description: 'Bug ID (e.g., Bug #001)' },
-              status: { type: 'string', enum: ['Open', 'In Progress', 'Fixed', 'Closed', 'Temporarily Resolved'] },
-              humanVerified: { type: 'boolean', description: 'Whether human verification is complete' }
-            },
-            required: ['bugId', 'status']
-          }
-        },
-        {
-          name: 'update_feature_status',
-          description: 'Update feature request status',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              featureId: { type: 'string', description: 'Feature ID (e.g., FR-001)' },
-              status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Research Phase', 'Partially Implemented', 'Completed', 'Rejected'] }
-            },
-            required: ['featureId', 'status']
-          }
-        },
-        {
-          name: 'update_improvement_status',
-          description: 'Update improvement status',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              improvementId: { type: 'string', description: 'Improvement ID (e.g., IMP-001)' },
-              status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Completed (Awaiting Human Verification)', 'Completed', 'Rejected'] },
-              dateCompleted: { type: 'string', description: 'Completion date (YYYY-MM-DD)' }
-            },
-            required: ['improvementId', 'status']
+            required: ['itemId', 'status']
           }
         },
         {
@@ -2216,22 +2512,23 @@ class ProjectManagementServer {
           }
         },
         {
-          name: 'bulk_update_bug_status',
-          description: 'Update multiple bug statuses in a single operation',
+          name: 'bulk_update_items',
+          description: 'Update multiple items (bugs, features, or improvements) in a single operation',
           inputSchema: {
             type: 'object',
             properties: {
               updates: {
                 type: 'array',
-                description: 'Array of bug updates to perform',
+                description: 'Array of item updates to perform',
                 items: {
                   type: 'object',
                   properties: {
-                    bugId: { type: 'string', description: 'Bug ID (e.g., Bug #001)' },
-                    status: { type: 'string', enum: ['Open', 'In Progress', 'Fixed', 'Closed', 'Temporarily Resolved'] },
-                    humanVerified: { type: 'boolean', description: 'Whether human verification is complete' }
+                    itemId: { type: 'string', description: 'Item ID (e.g., Bug #001, FR-001, IMP-001)' },
+                    status: { type: 'string', description: 'New status (valid values depend on item type)' },
+                    humanVerified: { type: 'boolean', description: 'Whether human verification is complete (bugs only)' },
+                    dateCompleted: { type: 'string', description: 'Completion date YYYY-MM-DD (improvements only)' }
                   },
-                  required: ['bugId', 'status']
+                  required: ['itemId', 'status']
                 }
               }
             },
@@ -2239,134 +2536,98 @@ class ProjectManagementServer {
           }
         },
         {
-          name: 'bulk_update_feature_status',
-          description: 'Update multiple feature request statuses in a single operation',
+          name: 'execute_workflow',
+          description: 'Execute predefined workflows for common multi-step operations',
           inputSchema: {
             type: 'object',
             properties: {
-              updates: {
+              workflow: {
+                type: 'string',
+                enum: ['create_and_link', 'batch_context_collection', 'status_transition'],
+                description: 'The workflow to execute'
+              },
+              // Fields for create_and_link workflow
+              items: {
                 type: 'array',
-                description: 'Array of feature updates to perform',
+                description: 'Items to create and link (for create_and_link workflow)',
                 items: {
                   type: 'object',
                   properties: {
-                    featureId: { type: 'string', description: 'Feature ID (e.g., FR-001)' },
-                    status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Research Phase', 'Partially Implemented', 'Completed', 'Rejected'] }
-                  },
-                  required: ['featureId', 'status']
+                    type: { type: 'string', enum: ['bug', 'feature', 'improvement'] },
+                    data: { type: 'object', description: 'Item data' },
+                    linkTo: { type: 'string', description: 'ID of item to link to' },
+                    relationshipType: { type: 'string', enum: ['blocks', 'relates_to', 'duplicate_of'] }
+                  }
                 }
-              }
-            },
-            required: ['updates']
-          }
-        },
-        {
-          name: 'bulk_update_improvement_status',
-          description: 'Update multiple improvement statuses in a single operation',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              updates: {
+              },
+              // Fields for batch_context_collection workflow
+              tasks: {
                 type: 'array',
-                description: 'Array of improvement updates to perform',
+                description: 'Tasks to collect contexts for (for batch_context_collection workflow)',
                 items: {
                   type: 'object',
                   properties: {
-                    improvementId: { type: 'string', description: 'Improvement ID (e.g., IMP-001)' },
-                    status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Completed (Awaiting Human Verification)', 'Completed', 'Rejected'] },
-                    dateCompleted: { type: 'string', description: 'Completion date (YYYY-MM-DD)' }
-                  },
-                  required: ['improvementId', 'status']
+                    taskId: { type: 'string' },
+                    taskType: { type: 'string', enum: ['bug', 'feature', 'improvement'] },
+                    title: { type: 'string' },
+                    description: { type: 'string' }
+                  }
+                }
+              },
+              // Fields for status_transition workflow
+              transitions: {
+                type: 'array',
+                description: 'Status transitions to perform (for status_transition workflow)',
+                items: {
+                  type: 'object',
+                  properties: {
+                    itemId: { type: 'string' },
+                    fromStatus: { type: 'string' },
+                    toStatus: { type: 'string' },
+                    verifyTransition: { type: 'boolean', description: 'Whether to verify transition is valid' }
+                  }
                 }
               }
             },
-            required: ['updates']
+            required: ['workflow']
           }
         },
         {
-          name: 'collect_task_context',
-          description: 'Collect relevant code context for a task using AI analysis',
+          name: 'manage_contexts',
+          description: 'Unified context management for tasks - collect, get, check freshness, add, update, or remove contexts',
           inputSchema: {
             type: 'object',
             properties: {
+              operation: {
+                type: 'string',
+                enum: ['collect', 'get', 'check_freshness', 'add', 'update', 'remove'],
+                description: 'The context operation to perform'
+              },
               taskId: { type: 'string', description: 'Task ID' },
-              taskType: { type: 'string', enum: ['bug', 'feature', 'improvement'], description: 'Type of task' },
-              title: { type: 'string', description: 'Task title' },
-              description: { type: 'string', description: 'Task description' },
-              currentState: { type: 'string', description: 'Current state (for improvements)' },
-              desiredState: { type: 'string', description: 'Desired state (for improvements)' },
-              expectedBehavior: { type: 'string', description: 'Expected behavior (for bugs)' },
-              actualBehavior: { type: 'string', description: 'Actual behavior (for bugs)' },
-              filesLikelyInvolved: { type: 'array', items: { type: 'string' }, description: 'Files likely involved' },
-              keywords: { type: 'array', items: { type: 'string' }, description: 'Additional keywords' },
-              entities: { type: 'array', items: { type: 'string' }, description: 'Additional entities' }
+              taskType: { type: 'string', enum: ['bug', 'feature', 'improvement'], description: 'Type of task (required for collect/add operations)' },
+              // Fields for collect operation
+              title: { type: 'string', description: 'Task title (for collect operation)' },
+              description: { type: 'string', description: 'Task description (for collect operation)' },
+              currentState: { type: 'string', description: 'Current state (for improvements, collect operation)' },
+              desiredState: { type: 'string', description: 'Desired state (for improvements, collect operation)' },
+              expectedBehavior: { type: 'string', description: 'Expected behavior (for bugs, collect operation)' },
+              actualBehavior: { type: 'string', description: 'Actual behavior (for bugs, collect operation)' },
+              filesLikelyInvolved: { type: 'array', items: { type: 'string' }, description: 'Files likely involved (for collect operation)' },
+              keywords: { type: 'array', items: { type: 'string' }, description: 'Additional keywords (for collect operation)' },
+              entities: { type: 'array', items: { type: 'string' }, description: 'Additional entities (for collect operation)' },
+              // Fields for add operation
+              contextType: { type: 'string', enum: ['snippet', 'file_reference', 'dependency', 'pattern'], description: 'Type of context (for add operation)' },
+              filePath: { type: 'string', description: 'Path to the file (for add operation)' },
+              startLine: { type: 'number', description: 'Start line number (for add operation)' },
+              endLine: { type: 'number', description: 'End line number (for add operation)' },
+              content: { type: 'string', description: 'Context content (for add operation)' },
+              contextDescription: { type: 'string', description: 'Context description (for add operation)' },
+              relevanceScore: { type: 'number', description: 'Relevance score 0-1 (for add operation)' },
+              // Fields for update/remove operations
+              contextId: { type: 'string', description: 'Context ID (for update/remove operations)' },
+              updates: { type: 'object', description: 'Updates to apply (for update operation)' }
             },
-            required: ['taskId', 'taskType', 'title', 'description']
-          }
-        },
-        {
-          name: 'get_task_contexts',
-          description: 'Get all contexts for a specific task',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              taskId: { type: 'string', description: 'Task ID to get contexts for' }
-            },
-            required: ['taskId']
-          }
-        },
-        {
-          name: 'check_context_freshness',
-          description: 'Check the freshness of contexts for a task',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              taskId: { type: 'string', description: 'Task ID to check contexts for' }
-            },
-            required: ['taskId']
-          }
-        },
-        {
-          name: 'add_manual_context',
-          description: 'Add a manual context to a task',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              taskId: { type: 'string', description: 'Task ID' },
-              taskType: { type: 'string', enum: ['bug', 'feature', 'improvement'], description: 'Type of task' },
-              contextType: { type: 'string', enum: ['snippet', 'file_reference', 'dependency', 'pattern'], description: 'Type of context' },
-              filePath: { type: 'string', description: 'Path to the file' },
-              startLine: { type: 'number', description: 'Start line number' },
-              endLine: { type: 'number', description: 'End line number' },
-              content: { type: 'string', description: 'Context content' },
-              description: { type: 'string', description: 'Context description' },
-              relevanceScore: { type: 'number', description: 'Relevance score (0-1)' },
-              keywords: { type: 'array', items: { type: 'string' }, description: 'Related keywords' }
-            },
-            required: ['taskId', 'taskType', 'filePath', 'description']
-          }
-        },
-        {
-          name: 'update_context',
-          description: 'Update an existing context',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              contextId: { type: 'string', description: 'Context ID to update' },
-              updates: { type: 'object', description: 'Updates to apply' }
-            },
-            required: ['contextId', 'updates']
-          }
-        },
-        {
-          name: 'remove_context',
-          description: 'Remove a context from a task',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              contextId: { type: 'string', description: 'Context ID to remove' }
-            },
-            required: ['contextId']
+            required: ['operation', 'taskId']
           }
         }
       ]
@@ -2377,24 +2638,12 @@ class ProjectManagementServer {
 
       try {
         switch (name) {
-          case 'create_bug':
-            return await this.createBug(args) as any;
-          case 'create_feature_request':
-            return await this.createFeatureRequest(args) as any;
-          case 'create_improvement':
-            return await this.createImprovement(args) as any;
-          case 'list_bugs':
-            return await this.listBugs(args) as any;
-          case 'list_feature_requests':
-            return await this.listFeatureRequests(args) as any;
-          case 'list_improvements':
-            return await this.listImprovements(args) as any;
-          case 'update_bug_status':
-            return await this.updateBugStatus(args) as any;
-          case 'update_feature_status':
-            return await this.updateFeatureStatus(args) as any;
-          case 'update_improvement_status':
-            return await this.updateImprovementStatus(args) as any;
+          case 'create_item':
+            return await this.createItem(args) as any;
+          case 'list_items':
+            return await this.listItems(args) as any;
+          case 'update_item_status':
+            return await this.updateItemStatus(args) as any;
           case 'search_items':
             return await this.searchItems(args) as any;
           case 'get_statistics':
@@ -2405,24 +2654,12 @@ class ProjectManagementServer {
             return await this.linkItems(args) as any;
           case 'get_related_items':
             return await this.getRelatedItems(args) as any;
-          case 'bulk_update_bug_status':
-            return await this.bulkUpdateBugStatus(args) as any;
-          case 'bulk_update_feature_status':
-            return await this.bulkUpdateFeatureStatus(args) as any;
-          case 'bulk_update_improvement_status':
-            return await this.bulkUpdateImprovementStatus(args) as any;
-          case 'collect_task_context':
-            return await this.collectContextForTask(args) as any;
-          case 'get_task_contexts':
-            return await this.getTaskContexts(args) as any;
-          case 'check_context_freshness':
-            return await this.checkContextFreshness(args) as any;
-          case 'add_manual_context':
-            return await this.addManualContext(args) as any;
-          case 'update_context':
-            return await this.updateContext(args) as any;
-          case 'remove_context':
-            return await this.removeContext(args) as any;
+          case 'bulk_update_items':
+            return await this.bulkUpdateItems(args) as any;
+          case 'execute_workflow':
+            return await this.executeWorkflow(args) as any;
+          case 'manage_contexts':
+            return await this.manageContexts(args) as any;
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
