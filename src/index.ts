@@ -329,13 +329,14 @@ class ProjectManagementServer {
         currentState: args.currentState,
         desiredState: args.desiredState,
         acceptanceCriteria: args.acceptanceCriteria,
+        filesLikelyInvolved: args.filesLikelyInvolved || [],
         effortEstimate: args.effortEstimate
       };
 
       return new Promise((resolve, reject) => {
         db.run(
-          `INSERT INTO improvements (id, status, priority, dateRequested, category, requestedBy, title, description, currentState, desiredState, acceptanceCriteria, effortEstimate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [newImprovement.id, newImprovement.status, newImprovement.priority, newImprovement.dateRequested, newImprovement.category, newImprovement.requestedBy, newImprovement.title, newImprovement.description, newImprovement.currentState, newImprovement.desiredState, JSON.stringify(newImprovement.acceptanceCriteria), newImprovement.effortEstimate],
+          `INSERT INTO improvements (id, status, priority, dateRequested, category, requestedBy, title, description, currentState, desiredState, acceptanceCriteria, filesLikelyInvolved, effortEstimate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [newImprovement.id, newImprovement.status, newImprovement.priority, newImprovement.dateRequested, newImprovement.category, newImprovement.requestedBy, newImprovement.title, newImprovement.description, newImprovement.currentState, newImprovement.desiredState, JSON.stringify(newImprovement.acceptanceCriteria), JSON.stringify(newImprovement.filesLikelyInvolved), newImprovement.effortEstimate],
           (err: any) => {
             if (err) {
               reject(new McpError(ErrorCode.InternalError, `Failed to create improvement: ${err.message}`));
