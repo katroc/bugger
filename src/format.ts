@@ -183,6 +183,38 @@ interface Bug {
     return output;
   }
   
+  export function formatImprovementsWithContext(improvements: any[]): string {
+    if (improvements.length === 0) {
+      return "No improvements found.";
+    }
+    
+    let output = formatImprovements(improvements);
+    
+    // Add code context for each improvement
+    improvements.forEach(improvement => {
+      if (improvement.codeContext && improvement.codeContext.length > 0) {
+        output += `\n${colors.highlight(`Code Context for ${improvement.id} - ${improvement.title}`)}\n`;
+        output += `${colors.info('Description:')} ${improvement.description}\n`;
+        output += `${colors.info('Current State:')} ${improvement.currentState}\n`;
+        output += `${colors.info('Desired State:')} ${improvement.desiredState}\n\n`;
+        
+        improvement.codeContext.forEach((context: any) => {
+          output += `${colors.highlight(`File: ${context.file}`)}\n`;
+          
+          if (context.error) {
+            output += `${colors.error(context.error)}\n\n`;
+          } else {
+            output += '```\n';
+            output += context.content;
+            output += '\n```\n\n';
+          }
+        });
+      }
+    });
+    
+    return output;
+  }
+  
   export function formatSearchResults(results: any[], metadata?: any): string {
     if (results.length === 0) {
       return "No items found.";

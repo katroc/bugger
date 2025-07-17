@@ -8,8 +8,10 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
-import { formatBugs, formatFeatureRequests, formatImprovements, formatSearchResults, formatStatistics, formatBulkUpdateResults } from './format.js';
+import { formatBugs, formatFeatureRequests, formatImprovements, formatImprovementsWithContext, formatSearchResults, formatStatistics, formatBulkUpdateResults } from './format.js';
 import sqlite3 from 'sqlite3';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Types based on your existing structure
 interface Bug {
@@ -215,14 +217,14 @@ class ProjectManagementServer {
             reject(new McpError(ErrorCode.InternalError, `Failed to generate ID: ${err.message}`));
             return;
           }
-          
+
           const maxNum = result && result.maxNum ? result.maxNum : 0;
           const nextNumber = maxNum + 1;
 
           const newId = type === 'bug' ? `Bug #${nextNumber.toString().padStart(3, '0')}` :
-                       type === 'feature' ? `FR-${nextNumber.toString().padStart(3, '0')}` :
-                       `IMP-${nextNumber.toString().padStart(3, '0')}`;
-          
+            type === 'feature' ? `FR-${nextNumber.toString().padStart(3, '0')}` :
+              `IMP-${nextNumber.toString().padStart(3, '0')}`;
+
           resolve(newId);
         }
       );
@@ -256,7 +258,7 @@ class ProjectManagementServer {
               reject(new McpError(ErrorCode.InternalError, `Failed to create bug: ${err.message}`));
               return;
             }
-            
+
             resolve({
               content: [
                 {
@@ -298,7 +300,7 @@ class ProjectManagementServer {
               reject(new McpError(ErrorCode.InternalError, `Failed to create feature request: ${err.message}`));
               return;
             }
-            
+
             resolve({
               content: [
                 {
@@ -339,7 +341,7 @@ class ProjectManagementServer {
               reject(new McpError(ErrorCode.InternalError, `Failed to create improvement: ${err.message}`));
               return;
             }
-            
+
             resolve({
               content: [
                 {
@@ -440,6 +442,179 @@ class ProjectManagementServer {
     });
   }
 
+  private async getCodeContextForImprovement(improvement: any): Promise<any[]> {
+    // Extract files from improvement data
+    const filesLikelyInvolved = improvement.filesLikelyInvolved || [];
+    const codeContexts: any[] = [];
+
+    // Look for file mentions in description, currentState, and desiredState
+    const textToAnalyze = [
+      improvement.description || '',
+      improvement.currentState || '',
+      improvement.desiredState || ''
+    ].join(' ');
+
+    // Simple regex to find potential file paths in text
+    const filePathRegex = /(?:\/|\\)?[\w\-\.\/\\]+\.(js|ts|jsx|tsx|py|java|rb|php|go|cs|html|css|json|md|yml|yaml)/g;
+    const mentionedFiles = textToAnalyze.match(filePathRegex) || [];
+
+    // Combine explicitly listed files with files mentioned in text
+    const allFiles = [...new Set([...filesLikelyInvolved, ...mentionedFiles])];
+
+    // Read content from each file
+    for (const file of allFiles) {
+      try {
+        // Check if file exists
+        if (fs.existsSync(file)) {
+          // Read file content (limit to reasonable size)
+          const content = fs.readFileSync(file, 'utf8');
+
+          // Extract relevant sections based on keywords from improvement
+          const relevantSections = this.extractRelevantSections(content, improvement);
+
+          codeContexts.push({
+            file,
+            content: relevantSections || content.substring(0, 1000) + (content.length > 1000 ? '...' : '')
+          });
+        }
+      } catch (error: any) {
+        console.error(`Error reading file ${file}:`, error);
+        // Add error info to context
+        codeContexts.push({
+          file,
+          error: `Could not read file: ${error.message}`
+        });
+      }
+    }
+
+    return codeContexts;
+  }
+
+  private extractRelevantSections(content: string, improvement: any): string | null {
+    // Extract keywords from improvement
+    const keywords = this.extractKeywords([
+      improvement.title,
+      improvement.description,
+      improvement.currentState,
+      improvement.desiredState
+    ].join(' '));
+
+    if (keywords.length === 0) {
+      return null;
+    }
+
+    // Split content into lines
+    const lines = content.split('\n');
+    const relevantLines: { line: number, content: string, score: number }[] = [];
+
+    // Score each line based on keyword matches
+    lines.forEach((line, index) => {
+      const lowerLine = line.toLowerCase();
+      let score = 0;
+
+      keywords.forEach(keyword => {
+        if (lowerLine.includes(keyword.toLowerCase())) {
+          score += 1;
+        }
+      });
+
+      if (score > 0) {
+        relevantLines.push({
+          line: index,
+          content: line,
+          score
+        });
+      }
+    });
+
+    // Sort by score (highest first)
+    relevantLines.sort((a, b) => b.score - a.score);
+
+    // Take top matches and include surrounding context
+    const contextSize = 5; // Lines before and after
+    const topMatches = relevantLines.slice(0, 3); // Top 3 matches
+
+    if (topMatches.length === 0) {
+      return null;
+    }
+
+    // Collect sections with context
+    const sections: { start: number, end: number }[] = [];
+
+    topMatches.forEach(match => {
+      const start = Math.max(0, match.line - contextSize);
+      const end = Math.min(lines.length - 1, match.line + contextSize);
+
+      // Check if this section overlaps with any existing section
+      const overlapping = sections.findIndex(section =>
+        (start >= section.start && start <= section.end) ||
+        (end >= section.start && end <= section.end) ||
+        (start <= section.start && end >= section.end)
+      );
+
+      if (overlapping >= 0) {
+        // Merge sections
+        sections[overlapping] = {
+          start: Math.min(start, sections[overlapping].start),
+          end: Math.max(end, sections[overlapping].end)
+        };
+      } else {
+        // Add new section
+        sections.push({ start, end });
+      }
+    });
+
+    // Sort sections by start line
+    sections.sort((a, b) => a.start - b.start);
+
+    // Build result with section markers
+    let result = '';
+    sections.forEach((section, index) => {
+      if (index > 0) {
+        result += '\n...\n';
+      }
+
+      result += `// Lines ${section.start + 1}-${section.end + 1}\n`;
+      for (let i = section.start; i <= section.end; i++) {
+        result += lines[i] + '\n';
+      }
+    });
+
+    return result;
+  }
+
+  private extractKeywords(text: string): string[] {
+    // Simple keyword extraction - remove common words and keep significant terms
+    const commonWords = new Set([
+      'the', 'and', 'or', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with', 'by',
+      'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+      'do', 'does', 'did', 'will', 'would', 'should', 'could', 'can', 'may', 'might',
+      'must', 'shall', 'should', 'this', 'that', 'these', 'those', 'it', 'they',
+      'we', 'you', 'he', 'she', 'him', 'her', 'them', 'their', 'our', 'your',
+      'of', 'from', 'as', 'but', 'not', 'no', 'yes', 'all', 'any', 'some', 'many',
+      'few', 'most', 'other', 'another', 'such', 'what', 'which', 'who', 'whom',
+      'whose', 'when', 'where', 'why', 'how'
+    ]);
+
+    // Extract words, filter common words, and keep words longer than 3 characters
+    const words = text.toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(word => word.length > 3 && !commonWords.has(word));
+
+    // Count word frequency
+    const wordCount = new Map<string, number>();
+    words.forEach(word => {
+      wordCount.set(word, (wordCount.get(word) || 0) + 1);
+    });
+
+    // Sort by frequency and take top 10
+    return Array.from(wordCount.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(entry => entry[0]);
+  }
+
   private async listImprovements(args: any) {
     return new Promise((resolve, reject) => {
       let query = 'SELECT * FROM improvements WHERE 1=1';
@@ -458,7 +633,7 @@ class ProjectManagementServer {
         params.push(`%${args.category}%`);
       }
 
-      this.db.all(query, params, (err: any, rows: any[]) => {
+      this.db.all(query, params, async (err: any, rows: any[]) => {
         if (err) {
           reject(new McpError(ErrorCode.InternalError, `Failed to list improvements: ${err.message}`));
           return;
@@ -472,11 +647,29 @@ class ProjectManagementServer {
           benefits: JSON.parse(improvement.benefits || '[]')
         }));
 
+        // Add code context if includeCodeContext is requested
+        let formattedOutput = formatImprovements(improvements);
+
+        if (args.includeCodeContext) {
+          try {
+            const improvementsWithContext = await Promise.all(
+              improvements.map(async (improvement: any) => {
+                const codeContext = await this.getCodeContextForImprovement(improvement);
+                return { ...improvement, codeContext };
+              })
+            );
+            formattedOutput = formatImprovementsWithContext(improvementsWithContext);
+          } catch (contextError) {
+            // If code context fails, fall back to regular formatting
+            console.error('Failed to get code context:', contextError);
+          }
+        }
+
         resolve({
           content: [
             {
               type: 'text',
-              text: formatImprovements(improvements)
+              text: formattedOutput
             }
           ]
         });
@@ -492,7 +685,7 @@ class ProjectManagementServer {
             reject(new McpError(ErrorCode.InternalError, `Failed to find bug: ${err.message}`));
             return;
           }
-          
+
           if (!bug) {
             reject(new McpError(ErrorCode.InvalidParams, `Bug ${args.bugId} not found`));
             return;
@@ -532,7 +725,7 @@ class ProjectManagementServer {
             reject(new McpError(ErrorCode.InternalError, `Failed to find feature: ${err.message}`));
             return;
           }
-          
+
           if (!feature) {
             reject(new McpError(ErrorCode.InvalidParams, `Feature ${args.featureId} not found`));
             return;
@@ -570,7 +763,7 @@ class ProjectManagementServer {
             reject(new McpError(ErrorCode.InternalError, `Failed to find improvement: ${err.message}`));
             return;
           }
-          
+
           if (!improvement) {
             reject(new McpError(ErrorCode.InvalidParams, `Improvement ${args.improvementId} not found`));
             return;
@@ -616,10 +809,10 @@ class ProjectManagementServer {
           // Sort results by date (newest first) if no specific sort order
           const sortBy = args.sortBy || 'date';
           const sortOrder = args.sortOrder || 'desc';
-          
+
           results.sort((a, b) => {
             let aValue, bValue;
-            
+
             switch (sortBy) {
               case 'date':
                 aValue = new Date(a.dateReported || a.dateRequested || 0);
@@ -642,19 +835,19 @@ class ProjectManagementServer {
                 aValue = (a.title || '').toLowerCase();
                 bValue = (b.title || '').toLowerCase();
             }
-            
+
             if (sortOrder === 'asc') {
               return aValue < bValue ? -1 : aValue > bValue ? 1 : 0;
             } else {
               return aValue > bValue ? -1 : aValue < bValue ? 1 : 0;
             }
           });
-          
+
           // Apply limit if specified
           const limit = args.limit || results.length;
           const offset = args.offset || 0;
           const limitedResults = results.slice(offset, offset + limit);
-          
+
           resolve({
             content: [
               {
@@ -1054,18 +1247,18 @@ class ProjectManagementServer {
 
   private async linkItems(args: any) {
     const { fromItem, toItem, relationshipType } = args;
-    
+
     // Validate that both items exist
     const fromExists = await this.itemExists(fromItem);
     const toExists = await this.itemExists(toItem);
-    
+
     if (!fromExists) {
       throw new McpError(ErrorCode.InvalidParams, `Source item ${fromItem} does not exist`);
     }
     if (!toExists) {
       throw new McpError(ErrorCode.InvalidParams, `Target item ${toItem} does not exist`);
     }
-    
+
     return this.withTransaction(async (db) => {
       return new Promise((resolve, reject) => {
         const stmt = db.prepare(`
@@ -1073,10 +1266,10 @@ class ProjectManagementServer {
           (fromItem, toItem, relationshipType, dateCreated) 
           VALUES (?, ?, ?, ?)
         `);
-        
+
         const dateCreated = new Date().toISOString();
-        
-        stmt.run([fromItem, toItem, relationshipType, dateCreated], function(err) {
+
+        stmt.run([fromItem, toItem, relationshipType, dateCreated], function (err) {
           if (err) {
             reject(new McpError(ErrorCode.InternalError, `Failed to create relationship: ${err.message}`));
           } else {
@@ -1096,26 +1289,26 @@ class ProjectManagementServer {
 
   private async getRelatedItems(args: any) {
     const { itemId } = args;
-    
+
     // Validate that the item exists
     const itemExists = await this.itemExists(itemId);
     if (!itemExists) {
       throw new McpError(ErrorCode.InvalidParams, `Item ${itemId} does not exist`);
     }
-    
+
     return new Promise((resolve, reject) => {
       const sql = `
         SELECT fromItem, toItem, relationshipType, dateCreated 
         FROM relationships 
         WHERE fromItem = ? OR toItem = ?
       `;
-      
+
       this.db.all(sql, [itemId, itemId], (err, rows: any[]) => {
         if (err) {
           reject(new McpError(ErrorCode.InternalError, `Failed to query relationships: ${err.message}`));
           return;
         }
-        
+
         if (rows.length === 0) {
           resolve({
             content: [
@@ -1127,16 +1320,16 @@ class ProjectManagementServer {
           });
           return;
         }
-        
+
         let output = `## Relationships for ${itemId}\n\n`;
-        
+
         rows.forEach(row => {
           const isSource = row.fromItem === itemId;
           const relatedItem = isSource ? row.toItem : row.fromItem;
           const direction = isSource ? '→' : '←';
           output += `${direction} ${row.relationshipType} ${relatedItem}\n`;
         });
-        
+
         resolve({
           content: [
             {
@@ -1156,10 +1349,10 @@ class ProjectManagementServer {
         'SELECT 1 FROM features WHERE id = ?',
         'SELECT 1 FROM improvements WHERE id = ?'
       ];
-      
+
       let found = false;
       let completed = 0;
-      
+
       queries.forEach(query => {
         this.db.get(query, [itemId], (err, row) => {
           if (err) {
@@ -1180,10 +1373,10 @@ class ProjectManagementServer {
 
   private async bulkUpdateBugStatus(args: any) {
     const { updates } = args;
-    
+
     return this.withTransaction(async (db) => {
       const results: any[] = [];
-      
+
       // First, validate all bugs exist
       for (const update of updates) {
         const bug = await new Promise((resolve, reject) => {
@@ -1192,7 +1385,7 @@ class ProjectManagementServer {
             else resolve(row);
           });
         });
-        
+
         if (!bug) {
           results.push({
             bugId: update.bugId,
@@ -1201,12 +1394,12 @@ class ProjectManagementServer {
           });
           continue;
         }
-        
+
         // Update the bug
         try {
           await new Promise((resolve, reject) => {
             const humanVerified = update.humanVerified !== undefined ? (update.humanVerified ? 1 : 0) : (bug as any).humanVerified;
-            
+
             db.run(
               'UPDATE bugs SET status = ?, humanVerified = ? WHERE id = ?',
               [update.status, humanVerified, update.bugId],
@@ -1216,7 +1409,7 @@ class ProjectManagementServer {
               }
             );
           });
-          
+
           results.push({
             bugId: update.bugId,
             status: 'success',
@@ -1230,9 +1423,9 @@ class ProjectManagementServer {
           });
         }
       }
-      
+
       const output = formatBulkUpdateResults(results, 'bugs');
-      
+
       return {
         content: [
           {
@@ -1246,10 +1439,10 @@ class ProjectManagementServer {
 
   private async bulkUpdateFeatureStatus(args: any) {
     const { updates } = args;
-    
+
     return this.withTransaction(async (db) => {
       const results: any[] = [];
-      
+
       // First, validate all features exist
       for (const update of updates) {
         const feature = await new Promise((resolve, reject) => {
@@ -1258,7 +1451,7 @@ class ProjectManagementServer {
             else resolve(row);
           });
         });
-        
+
         if (!feature) {
           results.push({
             featureId: update.featureId,
@@ -1267,7 +1460,7 @@ class ProjectManagementServer {
           });
           continue;
         }
-        
+
         // Update the feature
         try {
           await new Promise((resolve, reject) => {
@@ -1280,7 +1473,7 @@ class ProjectManagementServer {
               }
             );
           });
-          
+
           results.push({
             featureId: update.featureId,
             status: 'success',
@@ -1294,9 +1487,9 @@ class ProjectManagementServer {
           });
         }
       }
-      
+
       const output = formatBulkUpdateResults(results, 'features');
-      
+
       return {
         content: [
           {
@@ -1308,12 +1501,14 @@ class ProjectManagementServer {
     });
   }
 
+
+
   private async bulkUpdateImprovementStatus(args: any) {
     const { updates } = args;
-    
+
     return this.withTransaction(async (db) => {
       const results: any[] = [];
-      
+
       // First, validate all improvements exist
       for (const update of updates) {
         const improvement = await new Promise((resolve, reject) => {
@@ -1322,7 +1517,7 @@ class ProjectManagementServer {
             else resolve(row);
           });
         });
-        
+
         if (!improvement) {
           results.push({
             improvementId: update.improvementId,
@@ -1331,12 +1526,12 @@ class ProjectManagementServer {
           });
           continue;
         }
-        
+
         // Update the improvement
         try {
           await new Promise((resolve, reject) => {
             const dateCompleted = update.dateCompleted || (improvement as any).dateCompleted;
-            
+
             db.run(
               'UPDATE improvements SET status = ?, dateCompleted = ? WHERE id = ?',
               [update.status, dateCompleted, update.improvementId],
@@ -1346,7 +1541,7 @@ class ProjectManagementServer {
               }
             );
           });
-          
+
           results.push({
             improvementId: update.improvementId,
             status: 'success',
@@ -1361,9 +1556,9 @@ class ProjectManagementServer {
           });
         }
       }
-      
+
       const output = formatBulkUpdateResults(results, 'improvements');
-      
+
       return {
         content: [
           {
@@ -1462,13 +1657,14 @@ class ProjectManagementServer {
         },
         {
           name: 'list_improvements',
-          description: 'List improvements with optional filtering',
+          description: 'List improvements with optional filtering and code context',
           inputSchema: {
             type: 'object',
             properties: {
               status: { type: 'string', enum: ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Completed (Awaiting Human Verification)', 'Completed', 'Rejected'] },
               priority: { type: 'string', enum: ['Low', 'Medium', 'High'] },
-              category: { type: 'string' }
+              category: { type: 'string' },
+              includeCodeContext: { type: 'boolean', description: 'Include relevant code sections and file context' }
             }
           }
         },
@@ -1518,35 +1714,35 @@ class ProjectManagementServer {
             properties: {
               query: { type: 'string', description: 'Search query (optional - can search with filters only)' },
               type: { type: 'string', enum: ['bugs', 'features', 'improvements', 'all'], description: 'Type of items to search' },
-              searchFields: { 
-                type: 'array', 
+              searchFields: {
+                type: 'array',
                 items: { type: 'string' },
                 description: 'Specific fields to search in (e.g., ["title", "description"]). Defaults to title, description, and category/component'
               },
-              status: { 
-                type: ['string', 'array'], 
+              status: {
+                type: ['string', 'array'],
                 description: 'Filter by status (single value or array of values)'
               },
-              priority: { 
-                type: ['string', 'array'], 
+              priority: {
+                type: ['string', 'array'],
                 description: 'Filter by priority (single value or array of values)'
               },
               category: { type: 'string', description: 'Filter by category (partial match)' },
               component: { type: 'string', description: 'Filter by component (partial match, bugs only)' },
               dateFrom: { type: 'string', description: 'Start date for date range filter (YYYY-MM-DD)' },
               dateTo: { type: 'string', description: 'End date for date range filter (YYYY-MM-DD)' },
-              effortEstimate: { 
-                type: ['string', 'array'], 
+              effortEstimate: {
+                type: ['string', 'array'],
                 description: 'Filter by effort estimate (features/improvements only)'
               },
               humanVerified: { type: 'boolean', description: 'Filter by human verification status (bugs only)' },
-              sortBy: { 
-                type: 'string', 
+              sortBy: {
+                type: 'string',
                 enum: ['date', 'priority', 'title', 'status'],
                 description: 'Sort results by field (default: date)'
               },
-              sortOrder: { 
-                type: 'string', 
+              sortOrder: {
+                type: 'string',
                 enum: ['asc', 'desc'],
                 description: 'Sort order (default: desc)'
               },
@@ -1583,10 +1779,10 @@ class ProjectManagementServer {
             properties: {
               fromItem: { type: 'string', description: 'Source item ID (e.g., Bug #001, FR-001, IMP-001)' },
               toItem: { type: 'string', description: 'Target item ID (e.g., Bug #002, FR-002, IMP-002)' },
-              relationshipType: { 
-                type: 'string', 
+              relationshipType: {
+                type: 'string',
                 enum: ['blocks', 'relates_to', 'duplicate_of'],
-                description: 'Type of relationship between items' 
+                description: 'Type of relationship between items'
               }
             },
             required: ['fromItem', 'toItem', 'relationshipType']
