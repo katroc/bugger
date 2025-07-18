@@ -14,6 +14,7 @@ import { ImprovementManager } from './improvements.js';
 import { SearchManager } from './search.js';
 import { ContextManager } from './context.js';
 import { WorkflowManager } from './workflows.js';
+import { SubtaskManager } from './subtasks.js';
 import sqlite3 from 'sqlite3';
 
 class ProjectManagementServer {
@@ -25,6 +26,7 @@ class ProjectManagementServer {
   private searchManager: SearchManager;
   private contextManager: ContextManager;
   private workflowManager: WorkflowManager;
+  private subtaskManager: SubtaskManager;
 
   constructor() {
     this.server = new Server(
@@ -43,6 +45,7 @@ class ProjectManagementServer {
     this.searchManager = new SearchManager();
     this.contextManager = new ContextManager();
     this.workflowManager = new WorkflowManager();
+    this.subtaskManager = new SubtaskManager();
 
     this.setupToolHandlers();
   }
@@ -136,6 +139,22 @@ class ProjectManagementServer {
         dateCollected TEXT NOT NULL,
         dateLastChecked TEXT,
         isStale INTEGER DEFAULT 0
+      )`,
+      `CREATE TABLE IF NOT EXISTS subtasks (
+        id TEXT PRIMARY KEY,
+        parentId TEXT NOT NULL,
+        parentType TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL,
+        priority TEXT,
+        assignee TEXT,
+        estimatedHours REAL,
+        actualHours REAL,
+        dependencies TEXT,
+        dateCreated TEXT NOT NULL,
+        dateCompleted TEXT,
+        orderIndex INTEGER
       )`
     ];
 
@@ -256,6 +275,27 @@ class ProjectManagementServer {
 
   private async syncFromMarkdown(_args: any) {
     return 'Sync from markdown functionality not yet implemented in modular architecture.';
+  }
+
+  private async manageSubtasks(args: any) {
+    const { operation } = args;
+    
+    switch (operation) {
+      case 'create':
+        return this.subtaskManager.createSubtask(this.db, args);
+      case 'list':
+        return this.subtaskManager.listSubtasks(this.db, args);
+      case 'update_status':
+        return this.subtaskManager.updateSubtaskStatus(this.db, args);
+      case 'get_progress':
+        return this.subtaskManager.getSubtaskProgress(this.db, args);
+      case 'reorder':
+        return this.subtaskManager.reorderSubtasks(this.db, args);
+      case 'delete':
+        return this.subtaskManager.deleteSubtask(this.db, args);
+      default:
+        throw new Error(`Unknown subtask operation: ${operation}`);
+    }
   }
 
   private setupToolHandlers() {
@@ -620,6 +660,53 @@ class ProjectManagementServer {
               required: ['query'],
               additionalProperties: false
             }
+          },
+          {
+            name: 'manage_subtasks',
+            description: 'Manage subtasks for bugs, features, and improvements - create, list, update, reorder, and delete subtasks',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                operation: {
+                  type: 'string',
+                  enum: ['create', 'list', 'update_status', 'get_progress', 'reorder', 'delete'],
+                  description: 'The subtask operation to perform'
+                },
+                parentId: { type: 'string', description: 'Parent item ID (e.g., Bug #001, FR-001, IMP-001)' },
+                parentType: { 
+                  type: 'string', 
+                  enum: ['bug', 'feature', 'improvement'], 
+                  description: 'Type of parent item (required for create operation)' 
+                },
+                title: { type: 'string', description: 'Subtask title (for create operation)' },
+                description: { type: 'string', description: 'Subtask description (for create operation)' },
+                status: { 
+                  type: 'string', 
+                  enum: ['todo', 'in_progress', 'done', 'blocked'], 
+                  description: 'Subtask status (for create/update operations)' 
+                },
+                priority: { 
+                  type: 'string', 
+                  enum: ['low', 'medium', 'high'], 
+                  description: 'Subtask priority (for create operation)' 
+                },
+                assignee: { type: 'string', description: 'Person assigned to subtask (for create operation)' },
+                estimatedHours: { type: 'number', description: 'Estimated hours to complete (for create operation)' },
+                dependencies: { 
+                  type: 'array', 
+                  items: { type: 'string' }, 
+                  description: 'Array of subtask IDs this depends on (for create operation)' 
+                },
+                subtaskId: { type: 'string', description: 'Subtask ID (for update/delete operations)' },
+                subtaskOrder: { 
+                  type: 'array', 
+                  items: { type: 'string' }, 
+                  description: 'Array of subtask IDs in desired order (for reorder operation)' 
+                }
+              },
+              required: ['operation'],
+              additionalProperties: false
+            }
           }
         ]
       };
@@ -678,6 +765,10 @@ class ProjectManagementServer {
 
           case 'search_semantic':
             result = await this.searchManager.performSemanticSearch(this.db, args);
+            break;
+
+          case 'manage_subtasks':
+            result = await this.withTransaction(() => this.manageSubtasks(args));
             break;
 
           default:
