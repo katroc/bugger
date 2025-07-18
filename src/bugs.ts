@@ -157,6 +157,7 @@ export class BugManager {
    */
   async updateBugStatus(db: sqlite3.Database, args: any): Promise<string> {
     this.tokenTracker.startOperation('update_bug_status');
+    // Added comment to test context change detection
     
     const { itemId, status, humanVerified } = args;
 
