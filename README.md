@@ -4,6 +4,8 @@ A comprehensive Model Context Protocol (MCP) server that transforms how you mana
 
 Built for developers who want to stay in their flow state, bugger-mcp integrates directly with Claude, Cursor, Windsurf, and other MCP-compatible tools. No more context switching between your IDE and external tracking tools - manage your entire project lifecycle through simple conversations.
 
+**Version 0.4.5** - Now with modular architecture for better maintainability and performance.
+
 **Key Features:**
 - 🐛 **Bug Tracking** - Create detailed bug reports with reproduction steps, priorities, and component tracking
 - ✨ **Feature Management** - Plan new functionality with user stories, acceptance criteria, and effort estimates  
@@ -11,7 +13,11 @@ Built for developers who want to stay in their flow state, bugger-mcp integrates
 - 🔍 **Advanced Search** - Find items across your entire project with full-text search and filtering
 - 📊 **Analytics** - Get insights into project health with comprehensive statistics and reporting
 - 🔗 **Relationship Management** - Link related items to track dependencies and connections
+- 🤖 **Semantic Search** - AI-powered similarity matching to find related items by meaning, not just keywords
+- 🔄 **Workflow Automation** - Execute complex multi-step operations with predefined workflows
+- 📝 **Context Management** - Automatically collect and maintain relevant code snippets and file references
 - 💬 **Natural Language Interface** - Use conversational commands instead of complex UI interactions
+- 🏗️ **Modular Architecture** - Clean, maintainable codebase with focused manager classes
 
 ## MCP Server Setup
 
@@ -158,7 +164,22 @@ bugger-mcp now includes per-call token usage tracking and display, helping you m
 - Session-level token totals
 - Usage patterns across different tool types
 
-## Storage Architecture
+## Architecture
+
+### Modular Design (v0.4.5+)
+
+bugger-mcp features a clean, modular architecture that separates concerns into focused manager classes:
+
+- **BugManager**: Handles all bug-related operations including creation, status updates, and validation
+- **FeatureManager**: Manages feature requests with user stories, acceptance criteria, and effort estimation
+- **ImprovementManager**: Tracks technical debt, code quality improvements, and optimization tasks
+- **SearchManager**: Provides advanced search capabilities, filtering, and project statistics
+- **ContextManager**: Manages code context collection, file references, and dependency tracking
+- **WorkflowManager**: Orchestrates complex multi-step operations and item relationships
+
+This modular approach ensures better maintainability, easier testing, and cleaner separation of responsibilities while maintaining full backward compatibility.
+
+### Storage Architecture
 
 bugger-mcp uses SQLite for data storage, providing fast indexed searches, ACID transactions, and full-text search capabilities that scale well as projects grow. The single-file database approach offers the reliability and performance of a proper database without requiring server setup, while still supporting complex queries, relationships between items, and concurrent access from multiple AI assistant sessions.
 
