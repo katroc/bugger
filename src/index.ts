@@ -11,6 +11,7 @@ import {
 import { formatBugs, formatFeatureRequests, formatImprovements, formatImprovementsWithContext, formatSearchResults, formatStatistics, formatBulkUpdateResults } from './format.js';
 import { TextAnalyzer, KeywordResult } from './text-analysis.js';
 import { ContextCollectionEngine, TaskAnalysisInput, ContextCollectionResult, CodeContext } from './context-collection-engine.js';
+import { TokenUsageTracker } from './token-usage-tracker.js';
 import sqlite3 from 'sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -144,6 +145,7 @@ class ProjectManagementServer {
   private db!: sqlite3.Database;
   private textAnalyzer: TextAnalyzer;
   private contextEngine: ContextCollectionEngine;
+  private tokenTracker: TokenUsageTracker;
 
   constructor() {
     this.server = new Server(
@@ -157,6 +159,7 @@ class ProjectManagementServer {
     );
 
     this.textAnalyzer = new TextAnalyzer();
+    this.tokenTracker = TokenUsageTracker.getInstance();
     this.contextEngine = new ContextCollectionEngine(process.cwd(), {
       maxTokensPerTask: 2000,
       maxTokensPerContext: 200,
@@ -2641,34 +2644,63 @@ class ProjectManagementServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+      const requestInput = JSON.stringify(request.params);
 
       try {
+        // Start tracking this operation
+        this.tokenTracker.startOperation(name);
+        
+        let result: any;
         switch (name) {
           case 'create_item':
-            return await this.createItem(args) as any;
+            result = await this.createItem(args) as any;
+            break;
           case 'list_items':
-            return await this.listItems(args) as any;
+            result = await this.listItems(args) as any;
+            break;
           case 'update_item_status':
-            return await this.updateItemStatus(args) as any;
+            result = await this.updateItemStatus(args) as any;
+            break;
           case 'search_items':
-            return await this.searchItems(args) as any;
+            result = await this.searchItems(args) as any;
+            break;
           case 'get_statistics':
-            return await this.getStatistics(args) as any;
+            result = await this.getStatistics(args) as any;
+            break;
           case 'sync_from_markdown':
-            return await this.syncFromMarkdown(args) as any;
+            result = await this.syncFromMarkdown(args) as any;
+            break;
           case 'link_items':
-            return await this.linkItems(args) as any;
+            result = await this.linkItems(args) as any;
+            break;
           case 'get_related_items':
-            return await this.getRelatedItems(args) as any;
+            result = await this.getRelatedItems(args) as any;
+            break;
           case 'bulk_update_items':
-            return await this.bulkUpdateItems(args) as any;
+            result = await this.bulkUpdateItems(args) as any;
+            break;
           case 'execute_workflow':
-            return await this.executeWorkflow(args) as any;
+            result = await this.executeWorkflow(args) as any;
+            break;
           case 'manage_contexts':
-            return await this.manageContexts(args) as any;
+            result = await this.manageContexts(args) as any;
+            break;
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
+        
+        // Record token usage for this operation
+        const responseOutput = JSON.stringify(result);
+        const tokenUsage = this.tokenTracker.recordUsage(requestInput, responseOutput, name);
+        
+        // Add token usage info to the response
+        if (result && result.content && Array.isArray(result.content) && result.content.length > 0) {
+          const originalText = result.content[0].text || '';
+          const tokenInfo = `\n\n💾 Token Usage: ${tokenUsage.total} tokens (${tokenUsage.input} input + ${tokenUsage.output} output) | Session total: ${this.tokenTracker.getSessionUsage().totalTokens} tokens`;
+          result.content[0].text = originalText + tokenInfo;
+        }
+        
+        return result;
       } catch (error) {
         if (error instanceof McpError) {
           throw error;
@@ -2677,6 +2709,7 @@ class ProjectManagementServer {
       }
     });
   }
+
 
   async run() {
     try {
