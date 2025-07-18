@@ -1376,7 +1376,7 @@ class ProjectManagementServer {
     });
   }
 
-  private async syncFromMarkdown(args: any) {
+  private async syncFromMarkdown(_args: any) {
     return {
       content: [
         {
@@ -1516,7 +1516,7 @@ class ProjectManagementServer {
   private async bulkUpdateItems(args: any) {
     const { updates } = args;
     
-    return this.withTransaction(async (db) => {
+    return this.withTransaction(async (_db) => {
       const results: any[] = [];
       
       for (const update of updates) {
