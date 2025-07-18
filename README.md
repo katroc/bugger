@@ -4,14 +4,68 @@ A comprehensive Model Context Protocol (MCP) server that transforms how you mana
 
 Built for developers who want to stay in their flow state, bugger-mcp integrates directly with Claude, Cursor, Windsurf, and other MCP-compatible tools. No more context switching between your IDE and external tracking tools - manage your entire project lifecycle through simple conversations.
 
+**Version 0.4.5** - Now with modular architecture for better maintainability and performance.
+
 **Key Features:**
+- 🏗️ **3-Level Hierarchical Organization** - Items → Todos → Subtasks with intelligent auto-generation
 - 🐛 **Bug Tracking** - Create detailed bug reports with reproduction steps, priorities, and component tracking
 - ✨ **Feature Management** - Plan new functionality with user stories, acceptance criteria, and effort estimates  
 - 🔧 **Improvement Tracking** - Manage technical debt, code quality improvements, and optimization tasks
+- 🤖 **Smart Task Breakdown** - Automatically generate actionable todos from task descriptions
+- 📋 **Intelligent Subtask Grouping** - Auto-organize todos into logical work phases
 - 🔍 **Advanced Search** - Find items across your entire project with full-text search and filtering
 - 📊 **Analytics** - Get insights into project health with comprehensive statistics and reporting
 - 🔗 **Relationship Management** - Link related items to track dependencies and connections
+- 🔍 **Semantic Search** - AI-powered similarity matching to find related items by meaning, not just keywords
+- 🔄 **Workflow Automation** - Execute complex multi-step operations with predefined workflows
+- 📝 **Context Management** - Automatically collect and maintain relevant code snippets and file references
 - 💬 **Natural Language Interface** - Use conversational commands instead of complex UI interactions
+- 🏗️ **Modular Architecture** - Clean, maintainable codebase with focused manager classes
+
+## 3-Level Hierarchical Task Management
+
+bugger-mcp introduces a revolutionary approach to project management with intelligent 3-level hierarchy:
+
+### **Items → Todos → Subtasks**
+
+**The Natural Workflow:**
+1. **Create a Task** (Bug, Feature, or Improvement)
+2. **Generate Actionable Todos** - AI analyzes your task and creates specific, actionable todo items
+3. **Organize into Subtasks** - Todos are intelligently grouped into logical work phases
+
+### **Smart Auto-Generation**
+
+**Task-Specific Todo Generation:**
+- **Bugs**: Investigation → Implementation → Testing workflow
+- **Features**: Planning → Frontend/Backend → Testing → Documentation
+- **Improvements**: Analysis → Implementation → Validation
+
+**Intelligent Subtask Grouping:**
+- **Bugs**: "Investigation and Analysis" → "Implementation and Fix" → "Testing and Validation"
+- **Features**: "Planning and Design" → "Frontend Implementation" → "Backend Implementation" → "Testing and Documentation"
+- **Improvements**: "Analysis and Research" → "Implementation" → "Validation and Testing"
+
+### **Example Workflow:**
+
+```
+1. Create Bug: "API performance issues with database queries"
+   ↓
+2. Generate Todos:
+   - "Reproduce the issue and gather details"
+   - "Analyze logs and error messages"
+   - "Profile performance and identify bottlenecks"
+   - "Optimize slow queries or operations"
+   - "Write regression tests"
+   - "Test the fix in different scenarios"
+   - "Verify the fix resolves the original issue"
+   ↓
+3. Auto-Group into Subtasks:
+   - "Investigation and Analysis" (todos 1-2)
+   - "Implementation and Fix" (todos 3-4)
+   - "Testing and Validation" (todos 5-7)
+```
+
+This approach creates a more natural and actionable project management experience where **todos are the atomic work units** and **subtasks are logical groupings** of related work.
 
 ## MCP Server Setup
 
@@ -75,6 +129,10 @@ Once installed, you'll have access to these MCP tools:
 - **link_items**: Create relationships between items (blocks, relates_to, duplicate_of). Use to track dependencies and connections between different issues.
 - **sync_from_markdown**: Import existing data from markdown files. Use when migrating from other tracking systems or initializing the database.
 
+### Hierarchical Task Management
+- **manage_todos**: Comprehensive todo management with operations for creating, listing, toggling completion, and generating todos directly from tasks. Use to break down tasks into actionable work items.
+- **manage_subtasks**: Intelligent subtask management including creating, listing, updating status, and generating subtasks from existing todos. Use to organize todos into logical work phases.
+
 ### Advanced Features
 - **execute_workflow**: Execute predefined workflows for common multi-step operations like creating and linking multiple items, batch context collection, or status transitions. Use to automate complex project management tasks.
 - **manage_contexts**: Unified context management for tasks - collect, get, check freshness, add, update, or remove code contexts. Use to maintain relevant code snippets, file references, and dependencies for each item.
@@ -91,6 +149,15 @@ After installation, you can use natural language with your AI assistant to manag
 - "List all open bugs in the authentication component that have high priority"
 - "List all approved feature requests that are ready for development"
 - "List all improvements related to code quality that haven't been started yet"
+
+### Hierarchical Task Management
+- "Generate todos for Bug #001 to break it down into actionable work items"
+- "Create subtasks for Bug #001 by grouping the existing todos into logical work phases"
+- "Show me the todos for the authentication refactoring improvement"
+- "Generate todos for the dark mode feature request to see what work is needed"
+- "Create subtasks for FR-002 to organize the todos into development phases"
+- "Toggle completion for todo Bug #001-T03 since I finished that task"
+- "Show me the completion stats for Bug #001 todos to see our progress"
 
 ### Status Management
 - "Update bug #003 status to 'In Progress' since I'm working on it now"
@@ -158,7 +225,24 @@ bugger-mcp now includes per-call token usage tracking and display, helping you m
 - Session-level token totals
 - Usage patterns across different tool types
 
-## Storage Architecture
+## Architecture
+
+### Modular Design (v0.4.5+)
+
+bugger-mcp features a clean, modular architecture that separates concerns into focused manager classes:
+
+- **BugManager**: Handles all bug-related operations including creation, status updates, and validation
+- **FeatureManager**: Manages feature requests with user stories, acceptance criteria, and effort estimation
+- **ImprovementManager**: Tracks technical debt, code quality improvements, and optimization tasks
+- **SearchManager**: Provides advanced search capabilities, filtering, and project statistics
+- **ContextManager**: Manages code context collection, file references, and dependency tracking
+- **WorkflowManager**: Orchestrates complex multi-step operations and item relationships
+- **TodoManager**: Manages todo items with intelligent auto-generation from tasks and completion tracking
+- **SubtaskManager**: Handles subtask creation, grouping todos into logical work phases, and progress tracking
+
+This modular approach ensures better maintainability, easier testing, and cleaner separation of responsibilities while maintaining full backward compatibility. The new hierarchical workflow leverages these managers to create a natural Items → Todos → Subtasks progression.
+
+### Storage Architecture
 
 bugger-mcp uses SQLite for data storage, providing fast indexed searches, ACID transactions, and full-text search capabilities that scale well as projects grow. The single-file database approach offers the reliability and performance of a proper database without requiring server setup, while still supporting complex queries, relationships between items, and concurrent access from multiple AI assistant sessions.
 

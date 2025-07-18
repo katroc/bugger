@@ -1,9 +1,10 @@
-// Context collection engine that orchestrates text analysis, pattern matching, and dependency analysis
-import { TextAnalyzer, KeywordResult, EntityResult, IntentClassificationResult, TaskType } from './text-analysis.js';
+// Context collection engine that orchestrates pattern matching and dependency analysis
 import { CodePatternMatcher, FunctionMatch, ClassMatch, PatternMatch } from './code-pattern-matching.js';
 import { DependencyAnalyzer, DependencyGraph, FileRelationship } from './dependency-analysis.js';
 import * as fs from 'fs';
 import * as path from 'path';
+
+export type TaskType = 'bug' | 'feature' | 'improvement';
 
 export interface CodeContext {
   id: string;
@@ -99,18 +100,15 @@ export interface TaskAnalysisInput {
  * Main context collection engine that orchestrates all analysis components
  */
 export class ContextCollectionEngine {
-  private textAnalyzer: TextAnalyzer;
   private patternMatcher: CodePatternMatcher;
   private dependencyAnalyzer: DependencyAnalyzer;
   private config: ContextCollectionConfig;
   private contextCache: Map<string, CodeContext[]> = new Map();
-  private analysisCache: Map<string, any> = new Map();
 
   constructor(
     rootPath: string = process.cwd(),
     config: Partial<ContextCollectionConfig> = {}
   ) {
-    this.textAnalyzer = new TextAnalyzer();
     this.patternMatcher = new CodePatternMatcher(rootPath);
     this.dependencyAnalyzer = new DependencyAnalyzer(rootPath);
     this.config = this.mergeWithDefaultConfig(config);
@@ -205,7 +203,7 @@ export class ContextCollectionEngine {
    */
   public clearCaches(): void {
     this.contextCache.clear();
-    this.analysisCache.clear();
+    // Cache cleared
   }
 
   // Private methods
@@ -324,17 +322,10 @@ export class ContextCollectionEngine {
   }
 
   private async analyzeTaskText(input: TaskAnalysisInput): Promise<{
-    keywords: KeywordResult[];
-    entities: EntityResult[];
-    intent: IntentClassificationResult;
+    keywords: string[];
+    entities: string[];
     combinedText: string;
   }> {
-    const cacheKey = `text_analysis_${input.taskId}`;
-    
-    if (this.analysisCache.has(cacheKey)) {
-      return this.analysisCache.get(cacheKey);
-    }
-    
     // Combine all text fields for analysis
     const textFields = [
       input.title,
@@ -347,30 +338,79 @@ export class ContextCollectionEngine {
     
     const combinedText = textFields.join(' ');
     
-    // Extract keywords
-    const keywords = this.textAnalyzer.extractKeywords(combinedText, 20);
+    // Use provided keywords and entities, or extract simple ones from input
+    const keywords = input.keywords || this.extractSimpleKeywords(combinedText);
+    const entities = input.entities || this.extractSimpleEntities(combinedText);
     
-    // Extract entities
-    const entities = this.textAnalyzer.extractEntities(combinedText);
-    
-    // Classify intent
-    const intent = this.textAnalyzer.classifyIntent(combinedText, input.taskType);
-    
-    const result = {
+    return {
       keywords,
       entities,
-      intent,
       combinedText
     };
+  }
+
+  /**
+   * Simple keyword extraction (basic fallback when AI analysis isn't available)
+   */
+  private extractSimpleKeywords(text: string): string[] {
+    if (!text || typeof text !== 'string') {
+      return [];
+    }
     
-    this.analysisCache.set(cacheKey, result);
-    return result;
+    const words = text.toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(word => word.length > 3)
+      .filter(word => !this.isCommonWord(word));
+    
+    // Return unique words, limited to top 10
+    return Array.from(new Set(words)).slice(0, 10);
+  }
+
+  /**
+   * Simple entity extraction (basic fallback when AI analysis isn't available)
+   */
+  private extractSimpleEntities(text: string): string[] {
+    if (!text || typeof text !== 'string') {
+      return [];
+    }
+    
+    const entities: string[] = [];
+    
+    // Extract file paths
+    const fileMatches = text.match(/[a-zA-Z0-9_\-]+\.(js|ts|jsx|tsx|py|java|rb|php|go|cs|html|css|json)/g);
+    if (fileMatches) entities.push(...fileMatches);
+    
+    // Extract function-like patterns
+    const functionMatches = text.match(/[a-zA-Z_$][a-zA-Z0-9_$]*\s*\(/g);
+    if (functionMatches) {
+      entities.push(...functionMatches.map(m => m.replace(/\s*\($/, '')));
+    }
+    
+    // Extract camelCase/PascalCase identifiers
+    const identifierMatches = text.match(/\b[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*\b/g);
+    if (identifierMatches) entities.push(...identifierMatches);
+    
+    return Array.from(new Set(entities)).slice(0, 15);
+  }
+
+  /**
+   * Check if a word is a common English word
+   */
+  private isCommonWord(word: string): boolean {
+    const commonWords = new Set([
+      'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+      'from', 'up', 'about', 'into', 'over', 'after', 'this', 'that', 'these', 'those',
+      'they', 'them', 'their', 'there', 'then', 'than', 'when', 'where', 'why', 'how',
+      'what', 'which', 'who', 'will', 'would', 'could', 'should', 'might', 'must',
+      'have', 'has', 'had', 'been', 'being', 'are', 'was', 'were', 'is', 'am'
+    ]);
+    return commonWords.has(word);
   }
 
   private async findRelevantPatterns(textAnalysis: {
-    keywords: KeywordResult[];
-    entities: EntityResult[];
-    intent: IntentClassificationResult;
+    keywords: string[];
+    entities: string[];
     combinedText: string;
   }): Promise<{
     functions: FunctionMatch[];
@@ -381,18 +421,19 @@ export class ContextCollectionEngine {
     const classes: ClassMatch[] = [];
     const patterns: PatternMatch[] = [];
     
-    // Find functions mentioned in entities
-    const functionEntities = textAnalysis.entities.filter(e => e.type === 'function');
-    for (const entity of functionEntities) {
-      const functionMatches = await this.patternMatcher.findFunctionDefinitions(entity.entity);
-      functions.push(...functionMatches);
-    }
-    
-    // Find classes mentioned in entities
-    const classEntities = textAnalysis.entities.filter(e => e.type === 'class');
-    for (const entity of classEntities) {
-      const classMatches = await this.patternMatcher.findClassDefinitions(entity.entity);
-      classes.push(...classMatches);
+    // Find functions mentioned in entities (entities are now just strings)
+    for (const entity of textAnalysis.entities) {
+      // Check if entity looks like a function (contains parentheses or common function patterns)
+      if (entity.includes('(') || /^[a-z][a-zA-Z0-9]*$/.test(entity)) {
+        const functionMatches = await this.patternMatcher.findFunctionDefinitions(entity.replace(/\s*\(.*$/, ''));
+        functions.push(...functionMatches);
+      }
+      
+      // Check if entity looks like a class (starts with capital letter)
+      if (/^[A-Z][a-zA-Z0-9]*$/.test(entity)) {
+        const classMatches = await this.patternMatcher.findClassDefinitions(entity);
+        classes.push(...classMatches);
+      }
     }
     
     // Find similar patterns based on combined text
@@ -512,16 +553,16 @@ export class ContextCollectionEngine {
         let score = 0;
         
         // Score based on keyword matches
-        for (const keyword of textAnalysis.keywords) {
-          if (line.toLowerCase().includes(keyword.keyword.toLowerCase())) {
-            score += keyword.score;
+        for (const keyword of textAnalysis.keywords || []) {
+          if (keyword && typeof keyword === 'string' && line.toLowerCase().includes(keyword.toLowerCase())) {
+            score += 1; // Simple scoring since we don't have keyword.score anymore
           }
         }
         
         // Score based on entity matches
-        for (const entity of textAnalysis.entities) {
-          if (line.includes(entity.entity)) {
-            score += entity.confidence;
+        for (const entity of textAnalysis.entities || []) {
+          if (entity && typeof entity === 'string' && line.includes(entity)) {
+            score += 2; // Entities get higher score
           }
         }
         
@@ -662,8 +703,8 @@ export class ContextCollectionEngine {
     // Keyword match score
     let keywordScore = 0;
     for (const keyword of textAnalysis.keywords) {
-      if (section.content.toLowerCase().includes(keyword.keyword.toLowerCase())) {
-        keywordScore += keyword.score;
+      if (section.content.toLowerCase().includes(keyword.toLowerCase())) {
+        keywordScore += 1; // Simple scoring since we don't have keyword.score anymore
       }
     }
     score += keywordScore * weights.keywordMatch;
@@ -671,14 +712,14 @@ export class ContextCollectionEngine {
     // Entity match score
     let entityScore = 0;
     for (const entity of textAnalysis.entities) {
-      if (section.content.includes(entity.entity) || section.relatedEntities.includes(entity.entity)) {
-        entityScore += entity.confidence;
+      if (section.content.includes(entity) || section.relatedEntities.includes(entity)) {
+        entityScore += 2; // Entities get higher score
       }
     }
     score += entityScore * weights.entityMatch;
     
-    // Intent match score
-    const intentScore = this.calculateIntentMatchScore(section, textAnalysis.intent);
+    // Intent match score (simplified to use taskType instead of intent)
+    const intentScore = this.calculateIntentMatchScore(section, input.taskType);
     score += intentScore * weights.intentMatch;
     
     // File proximity score (if file is explicitly mentioned)
@@ -694,20 +735,17 @@ export class ContextCollectionEngine {
     return Math.min(1.0, score);
   }
 
-  private calculateIntentMatchScore(section: CodeSection, intent: IntentClassificationResult): number {
-    // Simple intent matching based on context type and intent category
-    const intentMatches: Record<string, string[]> = {
-      'function': ['location', 'type', 'complexity'],
-      'class': ['location', 'similarity', 'scope'],
-      'import': ['location', 'impact'],
-      'usage': ['type', 'scope', 'impact'],
-      'comment': ['type', 'scope']
+  private calculateIntentMatchScore(section: CodeSection, taskType: TaskType): number {
+    // Simple intent matching based on context type and task type
+    const taskTypeMatches: Record<string, string[]> = {
+      'bug': ['function', 'usage', 'comment'],
+      'feature': ['class', 'function', 'import'],
+      'improvement': ['function', 'class', 'usage']
     };
     
-    const contextTypeMatches = intentMatches[section.contextType] || [];
-    const intentCategory = intent.primaryIntent.category;
+    const contextTypeMatches = taskTypeMatches[taskType] || [];
     
-    return contextTypeMatches.includes(intentCategory) ? 0.8 : 0.3;
+    return contextTypeMatches.includes(section.contextType) ? 0.8 : 0.3;
   }
 
   private filterContexts(sections: CodeSection[]): CodeSection[] {

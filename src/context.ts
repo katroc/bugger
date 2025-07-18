@@ -130,13 +130,23 @@ export class ContextManager {
 
       let freshCount = 0;
       let staleCount = 0;
+      let contentChangedCount = 0;
       const staleContexts: CodeContext[] = [];
+      const changedContexts: CodeContext[] = [];
 
       for (const context of contexts) {
         const lastChecked = context.dateLastChecked ? new Date(context.dateLastChecked).getTime() : new Date(context.dateCollected).getTime();
         const age = now - lastChecked;
 
-        if (age > stalenessThreshold) {
+        // Check if content has changed
+        const contentChanged = await this.hasContentChanged(context);
+        
+        if (contentChanged) {
+          contentChangedCount++;
+          changedContexts.push(context);
+          // Mark as stale in database
+          await this.updateContextInDatabase(db, context.id, { isStale: true });
+        } else if (age > stalenessThreshold) {
           staleCount++;
           staleContexts.push(context);
         } else {
@@ -147,14 +157,27 @@ export class ContextManager {
       const summary = `Context freshness check for task ${taskId}:\n` +
                      `- Fresh contexts: ${freshCount}\n` +
                      `- Stale contexts: ${staleCount}\n` +
+                     `- Content changed contexts: ${contentChangedCount}\n` +
                      `- Total contexts: ${contexts.length}`;
+
+      let details = '';
+      
+      if (changedContexts.length > 0) {
+        const changedDetails = changedContexts.map(ctx => 
+          `  - ${ctx.id}: ${ctx.description} (content changed since collection)`
+        ).join('\n');
+        details += `\nContent changed contexts:\n${changedDetails}`;
+      }
 
       if (staleContexts.length > 0) {
         const staleDetails = staleContexts.map(ctx => 
           `  - ${ctx.id}: ${ctx.description} (last checked: ${ctx.dateLastChecked || ctx.dateCollected})`
         ).join('\n');
-        
-        return `${summary}\n\nStale contexts:\n${staleDetails}`;
+        details += `\nTime-based stale contexts:\n${staleDetails}`;
+      }
+
+      if (details) {
+        return `${summary}${details}`;
       }
 
       // Record token usage
@@ -422,6 +445,50 @@ export class ContextManager {
     }
 
     return output;
+  }
+
+  /**
+   * Check if context content has changed since collection
+   */
+  private async hasContentChanged(context: CodeContext): Promise<boolean> {
+    try {
+      const fs = await import('fs');
+      
+      // Check if file still exists
+      if (!fs.existsSync(context.filePath)) {
+        return true; // File deleted = content changed
+      }
+
+      // Read current file content
+      const currentContent = fs.readFileSync(context.filePath, 'utf8');
+      const lines = currentContent.split('\n');
+      
+      // Extract the lines that the context refers to
+      if (context.startLine && context.endLine) {
+        const contextLines = lines.slice(context.startLine - 1, context.endLine);
+        const currentContextContent = contextLines.join('\n').trim();
+        const originalContent = (context.content || '').trim();
+        
+        // Compare content (ignoring minor whitespace differences)
+        return this.normalizeContent(currentContextContent) !== this.normalizeContent(originalContent);
+      }
+      
+      // For contexts without specific line ranges, we can't easily verify
+      return false;
+    } catch (error) {
+      // If we can't read the file, assume it has changed
+      return true;
+    }
+  }
+
+  /**
+   * Normalize content for comparison (remove extra whitespace, etc.)
+   */
+  private normalizeContent(content: string): string {
+    return content
+      .replace(/\s+/g, ' ')  // Replace multiple whitespace with single space
+      .replace(/^\s+|\s+$/g, '') // Trim start and end
+      .toLowerCase(); // Case insensitive comparison
   }
 
   /**
