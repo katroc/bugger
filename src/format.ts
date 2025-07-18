@@ -22,47 +22,6 @@ const colors = {
   error: (text: string) => `❌ ${text}`
 };
 
-function getStatusColor(status: string): (text: string) => string {
-  switch (status.toLowerCase()) {
-    case 'open':
-    case 'proposed':
-      return colors.blue;
-    case 'in progress':
-    case 'in development':
-    case 'in discussion':
-      return colors.yellow;
-    case 'fixed':
-    case 'completed':
-    case 'approved':
-      return colors.green;
-    case 'closed':
-    case 'rejected':
-      return colors.red;
-    case 'temporarily resolved':
-    case 'research phase':
-    case 'partially implemented':
-      return colors.orange;
-    case 'completed (awaiting human verification)':
-      return colors.purple;
-    default:
-      return colors.info;
-  }
-}
-
-function getPriorityColor(priority: string): (text: string) => string {
-  switch (priority.toLowerCase()) {
-    case 'critical':
-      return colors.critical;
-    case 'high':
-      return colors.high;
-    case 'medium':
-      return colors.medium;
-    case 'low':
-      return colors.low;
-    default:
-      return colors.info;
-  }
-}
 
 interface Bug {
     id: string;

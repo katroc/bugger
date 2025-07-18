@@ -1,6 +1,4 @@
 // Text analysis module for extracting keywords and entities from task descriptions
-import * as fs from 'fs';
-import * as path from 'path';
 
 export interface KeywordResult {
   keyword: string;

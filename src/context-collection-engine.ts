@@ -1,7 +1,7 @@
 // Context collection engine that orchestrates text analysis, pattern matching, and dependency analysis
 import { TextAnalyzer, KeywordResult, EntityResult, IntentClassificationResult, TaskType } from './text-analysis.js';
-import { CodePatternMatcher, FunctionMatch, ClassMatch, PatternMatch, ArchitecturalContext } from './code-pattern-matching.js';
-import { DependencyAnalyzer, DependencyGraph, FileRelationship, ImportStatement, ExportStatement } from './dependency-analysis.js';
+import { CodePatternMatcher, FunctionMatch, ClassMatch, PatternMatch } from './code-pattern-matching.js';
+import { DependencyAnalyzer, DependencyGraph, FileRelationship } from './dependency-analysis.js';
 import * as fs from 'fs';
 import * as path from 'path';
 

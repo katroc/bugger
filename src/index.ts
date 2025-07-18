@@ -9,14 +9,11 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { formatBugs, formatFeatureRequests, formatImprovements, formatImprovementsWithContext, formatSearchResults, formatStatistics, formatBulkUpdateResults } from './format.js';
-import { TextAnalyzer, KeywordResult } from './text-analysis.js';
+import { TextAnalyzer } from './text-analysis.js';
 import { ContextCollectionEngine, TaskAnalysisInput, ContextCollectionResult, CodeContext } from './context-collection-engine.js';
 import { TokenUsageTracker } from './token-usage-tracker.js';
 import sqlite3 from 'sqlite3';
-// @ts-ignore: sqlite-vec doesn't have TypeScript declarations
-import * as sqliteVec from 'sqlite-vec';
 import * as fs from 'fs';
-import * as path from 'path';
 
 // Types based on your existing structure
 interface Bug {
