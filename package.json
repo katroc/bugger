@@ -1,6 +1,6 @@
 {
   "name": "bugger-mcp",
-  "version": "0.5.0",
+  "version": "0.4.5",
   "description": "MCP Server for managing bugs, feature requests, and improvements",
   "main": "index.js",
   "type": "module",
