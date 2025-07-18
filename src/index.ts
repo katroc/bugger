@@ -13,6 +13,8 @@ import { TextAnalyzer, KeywordResult } from './text-analysis.js';
 import { ContextCollectionEngine, TaskAnalysisInput, ContextCollectionResult, CodeContext } from './context-collection-engine.js';
 import { TokenUsageTracker } from './token-usage-tracker.js';
 import sqlite3 from 'sqlite3';
+// @ts-ignore: sqlite-vec doesn't have TypeScript declarations
+import * as sqliteVec from 'sqlite-vec';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -280,6 +282,74 @@ class ProjectManagementServer {
         });
       });
     });
+  }
+
+  private calculateSimilarity(text1: string, text2: string): number {
+    const words1 = text1.toLowerCase().split(/\s+/);
+    const words2 = text2.toLowerCase().split(/\s+/);
+    
+    const wordSet1 = new Set(words1);
+    const wordSet2 = new Set(words2);
+    
+    const intersection = new Set([...wordSet1].filter(word => wordSet2.has(word)));
+    const union = new Set([...wordSet1, ...wordSet2]);
+    
+    return union.size > 0 ? intersection.size / union.size : 0;
+  }
+
+  private async performSemanticSearch(args: any) {
+    const { query, type = 'all', limit = 10 } = args;
+    
+    try {
+      const searchTypes = type === 'all' ? ['bugs', 'features', 'improvements'] : [type === 'bug' ? 'bugs' : type === 'feature' ? 'features' : 'improvements'];
+      let allResults: any[] = [];
+      
+      for (const searchType of searchTypes) {
+        const results = await new Promise<any[]>((resolve, reject) => {
+          this.db.all(
+            `SELECT * FROM ${searchType}`,
+            [],
+            (err, rows) => {
+              if (err) {
+                reject(err);
+              } else {
+                // Calculate similarity for each row
+                const scoredResults = rows.map((row: any) => {
+                  const titleSimilarity = this.calculateSimilarity(query, row.title || '');
+                  const descSimilarity = this.calculateSimilarity(query, row.description || '');
+                  const avgSimilarity = (titleSimilarity + descSimilarity) / 2;
+                  
+                  return {
+                    ...row,
+                    similarity: avgSimilarity,
+                    type: searchType.slice(0, -1) // Remove 's' from table name
+                  };
+                }).filter(item => item.similarity > 0.1); // Only include items with some similarity
+                
+                resolve(scoredResults);
+              }
+            }
+          );
+        });
+        
+        allResults.push(...results);
+      }
+      
+      // Sort by similarity and limit results
+      allResults.sort((a, b) => b.similarity - a.similarity);
+      const limitedResults = allResults.slice(0, limit);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: formatSearchResults(limitedResults, query)
+          }
+        ]
+      };
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Failed to perform semantic search: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private async withTransaction<T>(operation: (db: sqlite3.Database) => Promise<T>): Promise<T> {
@@ -2473,6 +2543,19 @@ class ProjectManagementServer {
           }
         },
         {
+          name: 'semantic_search',
+          description: 'Semantic search using basic text similarity to find related items',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', description: 'Search query - will find items similar to this text' },
+              type: { type: 'string', enum: ['bug', 'feature', 'improvement', 'all'], description: 'Type of items to search (default: all)' },
+              limit: { type: 'number', description: 'Maximum number of results to return (default: 10)' }
+            },
+            required: ['query']
+          }
+        },
+        {
           name: 'get_statistics',
           description: 'Get project statistics',
           inputSchema: {
@@ -2663,6 +2746,9 @@ class ProjectManagementServer {
             break;
           case 'search_items':
             result = await this.searchItems(args) as any;
+            break;
+          case 'semantic_search':
+            result = await this.performSemanticSearch(args) as any;
             break;
           case 'get_statistics':
             result = await this.getStatistics(args) as any;
