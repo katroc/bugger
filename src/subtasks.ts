@@ -165,7 +165,7 @@ export class SubtaskManager {
 
       query += ' ORDER BY orderIndex ASC';
 
-      const subtasks = await new Promise<Subtask[]>((resolve, reject) => {
+      let subtasks = await new Promise<Subtask[]>((resolve, reject) => {
         db.all(query, params, (err, rows: any[]) => {
           if (err) {
             reject(new Error(`Failed to list subtasks: ${err.message}`));
@@ -179,6 +179,11 @@ export class SubtaskManager {
           }
         });
       });
+
+      // Auto-generate subtasks if none exist
+      if (subtasks.length === 0) {
+        subtasks = await this.autoGenerateSubtasks(db, parentId);
+      }
 
       // Format output
       const formattedOutput = this.formatSubtasksList(subtasks, parentId);
@@ -512,6 +517,353 @@ export class SubtaskManager {
     }
 
     return output;
+  }
+
+  /**
+   * Auto-generate subtasks based on parent task and contexts
+   */
+  private async autoGenerateSubtasks(db: sqlite3.Database, parentId: string): Promise<Subtask[]> {
+    try {
+      // Get parent task details
+      const parentTask = await this.getParentTaskDetails(db, parentId);
+      if (!parentTask) {
+        return []; // No parent task found, return empty array
+      }
+
+      // Generate subtasks based on task type and description
+      const generatedSubtasks = this.generateSubtasksForTaskType(parentTask);
+      
+      // Create subtasks in database
+      const createdSubtasks: Subtask[] = [];
+      
+      for (let i = 0; i < generatedSubtasks.length; i++) {
+        const subtaskData = generatedSubtasks[i];
+        const subtaskId = await this.generateNextSubtaskId(db, parentId);
+        const now = new Date().toISOString();
+        
+        const subtask: Subtask = {
+          id: subtaskId,
+          parentId: parentId,
+          parentType: parentTask.type,
+          title: subtaskData.title,
+          description: subtaskData.description,
+          status: 'todo',
+          priority: subtaskData.priority,
+          estimatedHours: subtaskData.estimatedHours,
+          dependencies: [],
+          dateCreated: now,
+          orderIndex: i
+        };
+
+        // Insert into database
+        await new Promise<void>((resolve, reject) => {
+          const insertQuery = `
+            INSERT INTO subtasks (
+              id, parentId, parentType, title, description, status, priority,
+              assignee, estimatedHours, actualHours, dependencies, 
+              dateCreated, dateCompleted, orderIndex
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `;
+
+          db.run(insertQuery, [
+            subtask.id,
+            subtask.parentId,
+            subtask.parentType,
+            subtask.title,
+            subtask.description,
+            subtask.status,
+            subtask.priority,
+            null, // assignee
+            subtask.estimatedHours,
+            null, // actualHours
+            JSON.stringify(subtask.dependencies),
+            subtask.dateCreated,
+            null, // dateCompleted
+            subtask.orderIndex
+          ], function(err) {
+            if (err) {
+              reject(new Error(`Failed to create auto-generated subtask: ${err.message}`));
+            } else {
+              resolve();
+            }
+          });
+        });
+
+        createdSubtasks.push(subtask);
+      }
+
+      return createdSubtasks;
+    } catch (error) {
+      console.error('Error auto-generating subtasks:', error);
+      return []; // Return empty array on error, don't fail the whole operation
+    }
+  }
+
+  /**
+   * Get parent task details from database
+   */
+  private async getParentTaskDetails(db: sqlite3.Database, parentId: string): Promise<any> {
+    // Determine table based on parentId prefix
+    let tableName: string;
+    let type: string;
+    
+    if (parentId.startsWith('Bug')) {
+      tableName = 'bugs';
+      type = 'bug';
+    } else if (parentId.startsWith('FR-')) {
+      tableName = 'feature_requests';
+      type = 'feature';
+    } else if (parentId.startsWith('IMP-')) {
+      tableName = 'improvements';
+      type = 'improvement';
+    } else {
+      return null;
+    }
+
+    return new Promise((resolve, reject) => {
+      const query = `SELECT * FROM ${tableName} WHERE id = ?`;
+      
+      db.get(query, [parentId], (err, row: any) => {
+        if (err) {
+          reject(new Error(`Failed to get parent task: ${err.message}`));
+        } else {
+          resolve(row ? { ...row, type } : null);
+        }
+      });
+    });
+  }
+
+  /**
+   * Generate subtasks based on task type and content
+   */
+  private generateSubtasksForTaskType(parentTask: any): any[] {
+    const taskType = parentTask.type;
+    const title = parentTask.title || '';
+    const description = parentTask.description || '';
+    
+    // Combine title and description for analysis
+    const content = `${title} ${description}`.toLowerCase();
+
+    switch (taskType) {
+      case 'bug':
+        return this.generateBugSubtasks(content, parentTask);
+      case 'feature':
+        return this.generateFeatureSubtasks(content, parentTask);
+      case 'improvement':
+        return this.generateImprovementSubtasks(content, parentTask);
+      default:
+        return this.generateGenericSubtasks(content, parentTask);
+    }
+  }
+
+  /**
+   * Generate subtasks for bug fixes
+   */
+  private generateBugSubtasks(content: string, parentTask: any): any[] {
+    const subtasks = [];
+
+    // Always start with investigation
+    subtasks.push({
+      title: 'Investigate and reproduce the issue',
+      description: 'Analyze the problem, understand the root cause, and create reliable reproduction steps',
+      priority: 'high',
+      estimatedHours: 1.5
+    });
+
+    // Code analysis based on content
+    if (content.includes('performance') || content.includes('slow') || content.includes('timeout')) {
+      subtasks.push({
+        title: 'Profile and identify performance bottlenecks',
+        description: 'Use profiling tools to identify the specific performance issues and measure current metrics',
+        priority: 'high',
+        estimatedHours: 2
+      });
+    }
+
+    if (content.includes('database') || content.includes('query') || content.includes('sql')) {
+      subtasks.push({
+        title: 'Optimize database operations',
+        description: 'Review and optimize database queries, indexes, and transaction handling',
+        priority: 'high',
+        estimatedHours: 3
+      });
+    }
+
+    if (content.includes('api') || content.includes('endpoint') || content.includes('request')) {
+      subtasks.push({
+        title: 'Fix API endpoint logic',
+        description: 'Update the API endpoint to handle the identified issues correctly',
+        priority: 'high',
+        estimatedHours: 2.5
+      });
+    }
+
+    // Always include implementation and testing
+    subtasks.push({
+      title: 'Implement the fix',
+      description: 'Apply the necessary code changes to resolve the identified issue',
+      priority: 'high',
+      estimatedHours: 2
+    });
+
+    subtasks.push({
+      title: 'Write tests and verify fix',
+      description: 'Create tests to prevent regression and verify the fix works as expected',
+      priority: 'medium',
+      estimatedHours: 1.5
+    });
+
+    return subtasks;
+  }
+
+  /**
+   * Generate subtasks for new features
+   */
+  private generateFeatureSubtasks(content: string, parentTask: any): any[] {
+    const subtasks = [];
+
+    // Design phase
+    subtasks.push({
+      title: 'Design feature architecture and API',
+      description: 'Plan the technical approach, API design, and integration points',
+      priority: 'high',
+      estimatedHours: 2
+    });
+
+    // UI/Frontend work
+    if (content.includes('ui') || content.includes('interface') || content.includes('component') || content.includes('theme')) {
+      subtasks.push({
+        title: 'Create UI components and styling',
+        description: 'Build the user interface components and implement the visual design',
+        priority: 'high',
+        estimatedHours: 3
+      });
+    }
+
+    // Backend/API work
+    if (content.includes('api') || content.includes('backend') || content.includes('database') || content.includes('server')) {
+      subtasks.push({
+        title: 'Implement backend logic and API endpoints',
+        description: 'Create the server-side functionality and API endpoints for the feature',
+        priority: 'high',
+        estimatedHours: 3.5
+      });
+    }
+
+    // Data/Storage
+    if (content.includes('data') || content.includes('storage') || content.includes('database') || content.includes('persist')) {
+      subtasks.push({
+        title: 'Set up data storage and persistence',
+        description: 'Implement data models, database schema changes, and persistence logic',
+        priority: 'medium',
+        estimatedHours: 2
+      });
+    }
+
+    // Integration and testing
+    subtasks.push({
+      title: 'Integrate components and test functionality',
+      description: 'Connect all parts of the feature and perform comprehensive testing',
+      priority: 'medium',
+      estimatedHours: 2.5
+    });
+
+    subtasks.push({
+      title: 'Write documentation and user guides',
+      description: 'Create technical documentation and user-facing guides for the new feature',
+      priority: 'low',
+      estimatedHours: 1
+    });
+
+    return subtasks;
+  }
+
+  /**
+   * Generate subtasks for improvements
+   */
+  private generateImprovementSubtasks(content: string, parentTask: any): any[] {
+    const subtasks = [];
+
+    // Analysis phase
+    subtasks.push({
+      title: 'Analyze current implementation',
+      description: 'Review the existing code and identify specific areas for improvement',
+      priority: 'high',
+      estimatedHours: 1.5
+    });
+
+    // Specific improvement types
+    if (content.includes('performance') || content.includes('optimize') || content.includes('speed')) {
+      subtasks.push({
+        title: 'Implement performance optimizations',
+        description: 'Apply performance improvements and optimize critical code paths',
+        priority: 'high',
+        estimatedHours: 3
+      });
+    }
+
+    if (content.includes('refactor') || content.includes('clean') || content.includes('structure')) {
+      subtasks.push({
+        title: 'Refactor and clean up code',
+        description: 'Improve code structure, readability, and maintainability',
+        priority: 'medium',
+        estimatedHours: 2.5
+      });
+    }
+
+    if (content.includes('security') || content.includes('vulnerability') || content.includes('auth')) {
+      subtasks.push({
+        title: 'Enhance security measures',
+        description: 'Implement security improvements and address potential vulnerabilities',
+        priority: 'high',
+        estimatedHours: 2
+      });
+    }
+
+    if (content.includes('test') || content.includes('coverage') || content.includes('quality')) {
+      subtasks.push({
+        title: 'Improve test coverage and quality',
+        description: 'Add missing tests and improve overall test quality and coverage',
+        priority: 'medium',
+        estimatedHours: 2
+      });
+    }
+
+    // Validation and documentation
+    subtasks.push({
+      title: 'Validate improvements and measure impact',
+      description: 'Test the improvements and measure their impact on the system',
+      priority: 'medium',
+      estimatedHours: 1.5
+    });
+
+    return subtasks;
+  }
+
+  /**
+   * Generate generic subtasks for unknown types
+   */
+  private generateGenericSubtasks(content: string, parentTask: any): any[] {
+    return [
+      {
+        title: 'Plan and analyze requirements',
+        description: 'Break down the task requirements and plan the implementation approach',
+        priority: 'high',
+        estimatedHours: 1
+      },
+      {
+        title: 'Implement core functionality',
+        description: 'Build the main functionality required for this task',
+        priority: 'high',
+        estimatedHours: 3
+      },
+      {
+        title: 'Test and validate implementation',
+        description: 'Test the implementation and ensure it meets the requirements',
+        priority: 'medium',
+        estimatedHours: 1.5
+      }
+    ];
   }
 
   /**
