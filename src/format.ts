@@ -204,6 +204,10 @@ interface Bug {
           if (context.error) {
             output += `${colors.error(context.error)}\n\n`;
           } else {
+            // Show token-optimized content display
+            const contentLength = context.content?.length || 0;
+            const estimatedTokens = Math.ceil(contentLength / 4);
+            output += `${colors.info(`Content (${contentLength} chars, ~${estimatedTokens} tokens)`)}\n`;
             output += '```\n';
             output += context.content;
             output += '\n```\n\n';

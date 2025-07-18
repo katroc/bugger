@@ -43,6 +43,17 @@ export interface ContextCollectionConfig {
   enableStalenessTracking: boolean;
   enablePatternMatching: boolean;
   enableDependencyAnalysis: boolean;
+  // Token optimization settings
+  maxTokensPerTask: number;
+  maxTokensPerContext: number;
+  enableIntelligentSummarization: boolean;
+  enableContentDeduplication: boolean;
+  compressionThreshold: number;
+  taskTypeTokenLimits: {
+    bug: number;
+    feature: number;
+    improvement: number;
+  };
   contextScoringWeights: {
     keywordMatch: number;
     entityMatch: number;
@@ -133,14 +144,18 @@ export class ContextCollectionEngine {
       const filteredContexts = this.filterContexts(scoredContexts);
       
       // Step 7: Convert to CodeContext objects
-      const contexts = await this.convertToCodeContexts(filteredContexts, input);
+      let contexts = await this.convertToCodeContexts(filteredContexts, input);
       
-      // Step 8: Generate summary and recommendations
+      // Step 8: Apply token optimizations
+      contexts = this.deduplicateContexts(contexts);
+      contexts = this.applyTokenFiltering(contexts, input.taskType);
+      
+      // Step 9: Generate summary and recommendations
       const summary = this.generateSummary(contexts, startTime, patternMatches, dependencyInfo);
       const recommendations = this.generateRecommendations(contexts, textAnalysis, patternMatches);
       const potentialIssues = this.identifyPotentialIssues(contexts, dependencyInfo);
       
-      // Step 9: Cache results
+      // Step 10: Cache results
       this.cacheResults(input.taskId, contexts);
       
       return {
@@ -194,6 +209,119 @@ export class ContextCollectionEngine {
   }
 
   // Private methods
+
+  /**
+   * Estimate token count for text content
+   */
+  private estimateTokenCount(text: string): number {
+    // Rough estimation: ~4 characters per token for English text
+    return Math.ceil(text.length / 4);
+  }
+
+  /**
+   * Intelligently summarize content to reduce token usage
+   */
+  private summarizeContent(content: string, maxTokens: number): string {
+    const estimatedTokens = this.estimateTokenCount(content);
+    
+    if (estimatedTokens <= maxTokens) {
+      return content;
+    }
+    
+    // Target character count based on token limit
+    const targetChars = maxTokens * 4;
+    
+    // If content is code, try to keep complete lines
+    const lines = content.split('\n');
+    let result = '';
+    let currentLength = 0;
+    
+    for (const line of lines) {
+      if (currentLength + line.length + 1 > targetChars) {
+        // Try to break at a natural point
+        const remainingChars = targetChars - currentLength;
+        if (remainingChars > 20) {
+          result += line.substring(0, remainingChars - 5) + '...';
+        }
+        break;
+      }
+      result += line + '\n';
+      currentLength += line.length + 1;
+    }
+    
+    return result.trim();
+  }
+
+  /**
+   * Deduplicate similar contexts based on content similarity
+   */
+  private deduplicateContexts(contexts: CodeContext[]): CodeContext[] {
+    if (!this.config.enableContentDeduplication) {
+      return contexts;
+    }
+    
+    const unique: CodeContext[] = [];
+    const seen = new Set<string>();
+    
+    for (const context of contexts) {
+      // Create a hash of the content for deduplication
+      const contentHash = this.createContentHash(context.content || '');
+      
+      if (!seen.has(contentHash)) {
+        seen.add(contentHash);
+        unique.push(context);
+      } else {
+        // If duplicate, merge keywords and update relevance score
+        const existing = unique.find(c => this.createContentHash(c.content || '') === contentHash);
+        if (existing) {
+          existing.keywords = [...new Set([...existing.keywords, ...context.keywords])];
+          existing.relevanceScore = Math.max(existing.relevanceScore, context.relevanceScore);
+        }
+      }
+    }
+    
+    return unique;
+  }
+
+  /**
+   * Create a hash of content for deduplication
+   */
+  private createContentHash(content: string): string {
+    // Simple hash based on normalized content
+    const normalized = content.replace(/\s+/g, ' ').trim().toLowerCase();
+    return normalized.substring(0, 200); // Use first 200 chars as hash
+  }
+
+  /**
+   * Apply token-aware filtering to contexts
+   */
+  private applyTokenFiltering(contexts: CodeContext[], taskType: TaskType): CodeContext[] {
+    let totalTokens = 0;
+    const filtered: CodeContext[] = [];
+    
+    // Get task-specific token limit
+    const taskTokenLimit = this.config.taskTypeTokenLimits[taskType] || this.config.maxTokensPerTask;
+    
+    // Sort by relevance score (highest first)
+    const sorted = contexts.sort((a, b) => b.relevanceScore - a.relevanceScore);
+    
+    for (const context of sorted) {
+      const contextTokens = this.estimateTokenCount(context.content || '');
+      
+      if (totalTokens + contextTokens <= taskTokenLimit) {
+        // Apply summarization if context exceeds per-context limit
+        if (contextTokens > this.config.maxTokensPerContext) {
+          context.content = this.summarizeContent(context.content || '', this.config.maxTokensPerContext);
+          context.description += ' (summarized)';
+        }
+        
+        filtered.push(context);
+        totalTokens += this.estimateTokenCount(context.content || '');
+      }
+    }
+    
+    return filtered;
+  }
 
   private async analyzeTaskText(input: TaskAnalysisInput): Promise<{
     keywords: KeywordResult[];
@@ -752,6 +880,17 @@ export class ContextCollectionEngine {
       enableStalenessTracking: true,
       enablePatternMatching: true,
       enableDependencyAnalysis: true,
+      // Token optimization defaults
+      maxTokensPerTask: 2000,
+      maxTokensPerContext: 200,
+      enableIntelligentSummarization: true,
+      enableContentDeduplication: true,
+      compressionThreshold: 500,
+      taskTypeTokenLimits: {
+        bug: 1500,
+        feature: 2500,
+        improvement: 2000,
+      },
       contextScoringWeights: {
         keywordMatch: 0.3,
         entityMatch: 0.3,

@@ -157,7 +157,13 @@ class ProjectManagementServer {
     );
 
     this.textAnalyzer = new TextAnalyzer();
-    this.contextEngine = new ContextCollectionEngine();
+    this.contextEngine = new ContextCollectionEngine(process.cwd(), {
+      maxTokensPerTask: 2000,
+      maxTokensPerContext: 200,
+      enableIntelligentSummarization: true,
+      enableContentDeduplication: true,
+      compressionThreshold: 500
+    });
     this.setupToolHandlers();
   }
 
