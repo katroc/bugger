@@ -72,71 +72,6 @@ interface Improvement {
   benefits?: string[];
 }
 
-// New interfaces for code context functionality
-interface TaskWithContext {
-  codeContexts: CodeContext[];
-}
-
-interface AnalysisResult {
-  keywords: string[];
-  entities: string[];
-  intent: string;
-  confidence: number;
-}
-
-
-
-interface EntityResult {
-  entity: string;
-  type: 'function' | 'class' | 'file' | 'variable';
-  confidence: number;
-}
-
-interface IntentResult {
-  intent: string;
-  confidence: number;
-  category: string;
-}
-
-interface FileMatch {
-  filePath: string;
-  relevanceScore: number;
-  matchedKeywords: string[];
-}
-
-interface CodeSection {
-  filePath: string;
-  startLine: number;
-  endLine: number;
-  content: string;
-  relevanceScore: number;
-}
-
-interface FunctionMatch {
-  name: string;
-  filePath: string;
-  startLine: number;
-  endLine: number;
-  signature: string;
-}
-
-interface PatternMatch {
-  pattern: string;
-  filePath: string;
-  startLine: number;
-  endLine: number;
-  similarity: number;
-}
-
-interface ArchitecturalContext {
-  configFiles: string[];
-  dependencies: string[];
-  relationships: Array<{
-    from: string;
-    to: string;
-    type: string;
-  }>;
-}
 
 
 class ProjectManagementServer {
@@ -1590,7 +1525,7 @@ class ProjectManagementServer {
         try {
           // Determine item type from ID format and delegate to appropriate method
           if (itemId.startsWith('Bug #')) {
-            const bugResult = await this.bulkUpdateBugStatus({
+            await this.bulkUpdateBugStatus({
               updates: [{ bugId: itemId, status, humanVerified }]
             });
             results.push({
@@ -1600,7 +1535,7 @@ class ProjectManagementServer {
               type: 'bug'
             });
           } else if (itemId.startsWith('FR-')) {
-            const featureResult = await this.bulkUpdateFeatureStatus({
+            await this.bulkUpdateFeatureStatus({
               updates: [{ featureId: itemId, status }]
             });
             results.push({
@@ -1610,7 +1545,7 @@ class ProjectManagementServer {
               type: 'feature'
             });
           } else if (itemId.startsWith('IMP-')) {
-            const improvementResult = await this.bulkUpdateImprovementStatus({
+            await this.bulkUpdateImprovementStatus({
               updates: [{ improvementId: itemId, status, dateCompleted }]
             });
             results.push({
@@ -1934,7 +1869,7 @@ class ProjectManagementServer {
     
     for (const task of tasks) {
       try {
-        const contextResult = await this.manageContexts({
+        await this.manageContexts({
           operation: 'collect',
           taskId: task.taskId,
           taskType: task.taskType,
@@ -2016,13 +1951,13 @@ class ProjectManagementServer {
     };
   }
 
-  private extractIdFromCreateResponse(response: any, type: string): string {
+  private extractIdFromCreateResponse(response: any, _type: string): string {
     const text = response.content[0].text;
     const match = text.match(/Created new \w+: ([^\s]+)/);
     return match ? match[1] : '';
   }
 
-  private async verifyStatusTransition(itemId: string, fromStatus: string, toStatus: string): Promise<boolean> {
+  private async verifyStatusTransition(_itemId: string, _fromStatus: string, _toStatus: string): Promise<boolean> {
     // This is a simplified implementation - in reality, you'd want to define valid transitions
     return true;
   }
