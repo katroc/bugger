@@ -353,6 +353,10 @@ export class ContextCollectionEngine {
    * Simple keyword extraction (basic fallback when AI analysis isn't available)
    */
   private extractSimpleKeywords(text: string): string[] {
+    if (!text || typeof text !== 'string') {
+      return [];
+    }
+    
     const words = text.toLowerCase()
       .replace(/[^\w\s]/g, ' ')
       .split(/\s+/)
@@ -367,6 +371,10 @@ export class ContextCollectionEngine {
    * Simple entity extraction (basic fallback when AI analysis isn't available)
    */
   private extractSimpleEntities(text: string): string[] {
+    if (!text || typeof text !== 'string') {
+      return [];
+    }
+    
     const entities: string[] = [];
     
     // Extract file paths
@@ -545,16 +553,16 @@ export class ContextCollectionEngine {
         let score = 0;
         
         // Score based on keyword matches
-        for (const keyword of textAnalysis.keywords) {
-          if (line.toLowerCase().includes(keyword.keyword.toLowerCase())) {
-            score += keyword.score;
+        for (const keyword of textAnalysis.keywords || []) {
+          if (keyword && typeof keyword === 'string' && line.toLowerCase().includes(keyword.toLowerCase())) {
+            score += 1; // Simple scoring since we don't have keyword.score anymore
           }
         }
         
         // Score based on entity matches
-        for (const entity of textAnalysis.entities) {
-          if (line.includes(entity.entity)) {
-            score += entity.confidence;
+        for (const entity of textAnalysis.entities || []) {
+          if (entity && typeof entity === 'string' && line.includes(entity)) {
+            score += 2; // Entities get higher score
           }
         }
         
@@ -695,8 +703,8 @@ export class ContextCollectionEngine {
     // Keyword match score
     let keywordScore = 0;
     for (const keyword of textAnalysis.keywords) {
-      if (section.content.toLowerCase().includes(keyword.keyword.toLowerCase())) {
-        keywordScore += keyword.score;
+      if (section.content.toLowerCase().includes(keyword.toLowerCase())) {
+        keywordScore += 1; // Simple scoring since we don't have keyword.score anymore
       }
     }
     score += keywordScore * weights.keywordMatch;
@@ -704,14 +712,14 @@ export class ContextCollectionEngine {
     // Entity match score
     let entityScore = 0;
     for (const entity of textAnalysis.entities) {
-      if (section.content.includes(entity.entity) || section.relatedEntities.includes(entity.entity)) {
-        entityScore += entity.confidence;
+      if (section.content.includes(entity) || section.relatedEntities.includes(entity)) {
+        entityScore += 2; // Entities get higher score
       }
     }
     score += entityScore * weights.entityMatch;
     
-    // Intent match score
-    const intentScore = this.calculateIntentMatchScore(section, textAnalysis.intent);
+    // Intent match score (simplified to use taskType instead of intent)
+    const intentScore = this.calculateIntentMatchScore(section, input.taskType);
     score += intentScore * weights.intentMatch;
     
     // File proximity score (if file is explicitly mentioned)
