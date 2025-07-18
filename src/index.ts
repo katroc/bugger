@@ -48,7 +48,7 @@ class ProjectManagementServer {
   }
 
   private async initDb() {
-    const dbPath = process.env.DB_PATH || 'project_management.db';
+    const dbPath = process.env.DB_PATH || 'bugger.db';
     
     this.db = new sqlite3.Database(dbPath, (err) => {
       if (err) {
