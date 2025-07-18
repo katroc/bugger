@@ -448,43 +448,6 @@ export class SubtaskManager {
     });
   }
 
-  /**
-   * Format subtasks list for display
-   */
-  private formatSubtasksList(subtasks: Subtask[], parentId: string): string {
-    if (subtasks.length === 0) {
-      return `No subtasks found for ${parentId}.`;
-    }
-
-    let output = `Subtasks for ${parentId}:\n\n`;
-
-    subtasks.forEach((subtask, index) => {
-      const statusEmoji = this.getStatusEmoji(subtask.status);
-      output += `${index + 1}. ${statusEmoji} ${subtask.title} [${subtask.id}]\n`;
-      output += `   Status: ${subtask.status.toUpperCase()}\n`;
-      output += `   Priority: ${subtask.priority}\n`;
-
-      if (subtask.assignee) {
-        output += `   Assignee: ${subtask.assignee}\n`;
-      }
-
-      if (subtask.estimatedHours) {
-        output += `   Estimated: ${subtask.estimatedHours} hours\n`;
-      }
-
-      if (subtask.actualHours) {
-        output += `   Actual: ${subtask.actualHours} hours\n`;
-      }
-
-      if (subtask.dependencies && subtask.dependencies.length > 0) {
-        output += `   Dependencies: ${subtask.dependencies.join(', ')}\n`;
-      }
-
-      output += '\n';
-    });
-
-    return output;
-  }
 
   /**
    * Format progress statistics
@@ -864,6 +827,438 @@ export class SubtaskManager {
         estimatedHours: 1.5
       }
     ];
+  }
+
+  /**
+   * Generate subtasks by grouping existing todos
+   */
+  async generateSubtasksFromTodos(db: sqlite3.Database, args: any): Promise<string> {
+    this.tokenTracker.startOperation('generate_subtasks_from_todos');
+    
+    const { parentId, parentType } = args;
+
+    if (!parentId || !parentType) {
+      throw new Error('parentId and parentType are required');
+    }
+
+    try {
+      // Check if subtasks already exist for this task
+      const existingSubtasks = await this.getExistingSubtasks(db, parentId);
+      if (existingSubtasks.length > 0) {
+        return this.formatSubtasksList(existingSubtasks, parentId);
+      }
+
+      // Get existing todos for this task
+      const todos = await this.getTodosForTask(db, parentId);
+      if (todos.length === 0) {
+        throw new Error(`No todos found for task ${parentId}. Generate todos first.`);
+      }
+
+      // Group todos into logical subtasks
+      const subtaskGroups = this.groupTodosIntoSubtasks(todos, parentType);
+      
+      // Create subtasks in database
+      const createdSubtasks: Subtask[] = [];
+      
+      for (let i = 0; i < subtaskGroups.length; i++) {
+        const group = subtaskGroups[i];
+        const subtaskId = await this.generateNextSubtaskId(db, parentId);
+        const now = new Date().toISOString();
+        
+        const subtask: Subtask = {
+          id: subtaskId,
+          parentId: parentId,
+          parentType: parentType as 'bug' | 'feature' | 'improvement',
+          title: group.title,
+          description: group.description,
+          status: 'todo',
+          priority: group.priority,
+          estimatedHours: group.estimatedHours,
+          dependencies: [],
+          dateCreated: now,
+          orderIndex: i
+        };
+
+        // Insert subtask into database
+        await new Promise<void>((resolve, reject) => {
+          const insertQuery = `
+            INSERT INTO subtasks (
+              id, parentId, parentType, title, description, status, priority,
+              assignee, estimatedHours, actualHours, dependencies, 
+              dateCreated, dateCompleted, orderIndex
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `;
+
+          db.run(insertQuery, [
+            subtask.id,
+            subtask.parentId,
+            subtask.parentType,
+            subtask.title,
+            subtask.description,
+            subtask.status,
+            subtask.priority,
+            null, // assignee
+            subtask.estimatedHours,
+            null, // actualHours
+            JSON.stringify(subtask.dependencies || []),
+            subtask.dateCreated,
+            null, // dateCompleted
+            subtask.orderIndex
+          ], function(err) {
+            if (err) {
+              reject(new Error(`Failed to create subtask: ${err.message}`));
+            } else {
+              resolve();
+            }
+          });
+        });
+
+        // Update todos to assign them to this subtask
+        await this.assignTodosToSubtask(db, group.todoIds, subtaskId);
+
+        createdSubtasks.push(subtask);
+      }
+
+      // Format and return the list
+      const formattedOutput = this.formatSubtasksList(createdSubtasks, parentId);
+      
+      // Record token usage
+      const inputText = JSON.stringify(args);
+      const outputText = formattedOutput;
+      const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'generate_subtasks_from_todos');
+      
+      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+    } catch (error) {
+      throw new Error(`Failed to generate subtasks from todos: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Get existing subtasks for a task
+   */
+  private async getExistingSubtasks(db: sqlite3.Database, parentId: string): Promise<Subtask[]> {
+    return new Promise((resolve, reject) => {
+      const query = 'SELECT * FROM subtasks WHERE parentId = ? ORDER BY orderIndex';
+      
+      db.all(query, [parentId], (err, rows: any[]) => {
+        if (err) {
+          reject(new Error(`Failed to get existing subtasks: ${err.message}`));
+        } else {
+          const subtasks: Subtask[] = rows.map(row => ({
+            id: row.id,
+            parentId: row.parentId,
+            parentType: row.parentType,
+            title: row.title,
+            description: row.description,
+            status: row.status,
+            priority: row.priority,
+            assignee: row.assignee,
+            estimatedHours: row.estimatedHours,
+            actualHours: row.actualHours,
+            dependencies: row.dependencies ? JSON.parse(row.dependencies) : [],
+            dateCreated: row.dateCreated,
+            dateCompleted: row.dateCompleted,
+            orderIndex: row.orderIndex
+          }));
+          resolve(subtasks);
+        }
+      });
+    });
+  }
+
+  /**
+   * Get todos for a task
+   */
+  private async getTodosForTask(db: sqlite3.Database, parentId: string): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      const query = 'SELECT * FROM todo_items WHERE parentId = ? ORDER BY orderIndex';
+      
+      db.all(query, [parentId], (err, rows: any[]) => {
+        if (err) {
+          reject(new Error(`Failed to get todos: ${err.message}`));
+        } else {
+          resolve(rows);
+        }
+      });
+    });
+  }
+
+  /**
+   * Group todos into logical subtasks
+   */
+  private groupTodosIntoSubtasks(todos: any[], parentType: string): any[] {
+    const groups: any[] = [];
+    
+    if (parentType === 'bug') {
+      // Group bug todos into: Investigation, Implementation, Testing
+      const investigationTodos = todos.filter(todo => 
+        todo.description.toLowerCase().includes('reproduce') ||
+        todo.description.toLowerCase().includes('analyze') ||
+        todo.description.toLowerCase().includes('gather') ||
+        todo.description.toLowerCase().includes('logs')
+      );
+      
+      const implementationTodos = todos.filter(todo => 
+        todo.description.toLowerCase().includes('fix') ||
+        todo.description.toLowerCase().includes('implement') ||
+        todo.description.toLowerCase().includes('optimize') ||
+        todo.description.toLowerCase().includes('profile')
+      );
+      
+      const testingTodos = todos.filter(todo => 
+        todo.description.toLowerCase().includes('test') ||
+        todo.description.toLowerCase().includes('verify') ||
+        todo.description.toLowerCase().includes('validate')
+      );
+      
+      const remainingTodos = todos.filter(todo => 
+        !investigationTodos.includes(todo) && 
+        !implementationTodos.includes(todo) && 
+        !testingTodos.includes(todo)
+      );
+
+      if (investigationTodos.length > 0) {
+        groups.push({
+          title: 'Investigation and Analysis',
+          description: 'Investigate the issue and identify root causes',
+          priority: 'high',
+          estimatedHours: investigationTodos.length * 0.5,
+          todoIds: investigationTodos.map(t => t.id)
+        });
+      }
+
+      if (implementationTodos.length > 0) {
+        groups.push({
+          title: 'Implementation and Fix',
+          description: 'Implement the solution and fix the issue',
+          priority: 'high',
+          estimatedHours: implementationTodos.length * 1.0,
+          todoIds: implementationTodos.map(t => t.id)
+        });
+      }
+
+      if (testingTodos.length > 0) {
+        groups.push({
+          title: 'Testing and Validation',
+          description: 'Test the fix and validate the solution',
+          priority: 'medium',
+          estimatedHours: testingTodos.length * 0.5,
+          todoIds: testingTodos.map(t => t.id)
+        });
+      }
+
+      if (remainingTodos.length > 0) {
+        groups.push({
+          title: 'Additional Tasks',
+          description: 'Other related tasks',
+          priority: 'medium',
+          estimatedHours: remainingTodos.length * 0.5,
+          todoIds: remainingTodos.map(t => t.id)
+        });
+      }
+    } else if (parentType === 'feature') {
+      // Group feature todos into: Planning, Frontend, Backend, Testing
+      const planningTodos = todos.filter(todo => 
+        todo.description.toLowerCase().includes('define') ||
+        todo.description.toLowerCase().includes('design') ||
+        todo.description.toLowerCase().includes('plan') ||
+        todo.description.toLowerCase().includes('requirements')
+      );
+      
+      const frontendTodos = todos.filter(todo => 
+        todo.description.toLowerCase().includes('ui') ||
+        todo.description.toLowerCase().includes('frontend') ||
+        todo.description.toLowerCase().includes('interface') ||
+        todo.description.toLowerCase().includes('mockup')
+      );
+      
+      const backendTodos = todos.filter(todo => 
+        todo.description.toLowerCase().includes('api') ||
+        todo.description.toLowerCase().includes('backend') ||
+        todo.description.toLowerCase().includes('database') ||
+        todo.description.toLowerCase().includes('server')
+      );
+      
+      const testingTodos = todos.filter(todo => 
+        todo.description.toLowerCase().includes('test') ||
+        todo.description.toLowerCase().includes('integration') ||
+        todo.description.toLowerCase().includes('documentation')
+      );
+      
+      const remainingTodos = todos.filter(todo => 
+        !planningTodos.includes(todo) && 
+        !frontendTodos.includes(todo) && 
+        !backendTodos.includes(todo) && 
+        !testingTodos.includes(todo)
+      );
+
+      if (planningTodos.length > 0) {
+        groups.push({
+          title: 'Planning and Design',
+          description: 'Plan the feature and design the architecture',
+          priority: 'high',
+          estimatedHours: planningTodos.length * 1.0,
+          todoIds: planningTodos.map(t => t.id)
+        });
+      }
+
+      if (frontendTodos.length > 0) {
+        groups.push({
+          title: 'Frontend Implementation',
+          description: 'Implement the user interface and frontend components',
+          priority: 'high',
+          estimatedHours: frontendTodos.length * 1.5,
+          todoIds: frontendTodos.map(t => t.id)
+        });
+      }
+
+      if (backendTodos.length > 0) {
+        groups.push({
+          title: 'Backend Implementation',
+          description: 'Implement the backend logic and data layer',
+          priority: 'high',
+          estimatedHours: backendTodos.length * 1.5,
+          todoIds: backendTodos.map(t => t.id)
+        });
+      }
+
+      if (testingTodos.length > 0) {
+        groups.push({
+          title: 'Testing and Documentation',
+          description: 'Test the feature and update documentation',
+          priority: 'medium',
+          estimatedHours: testingTodos.length * 0.75,
+          todoIds: testingTodos.map(t => t.id)
+        });
+      }
+
+      if (remainingTodos.length > 0) {
+        groups.push({
+          title: 'Additional Tasks',
+          description: 'Other feature-related tasks',
+          priority: 'medium',
+          estimatedHours: remainingTodos.length * 0.75,
+          todoIds: remainingTodos.map(t => t.id)
+        });
+      }
+    } else if (parentType === 'improvement') {
+      // Group improvement todos into: Analysis, Implementation, Validation
+      const analysisTodos = todos.filter(todo => 
+        todo.description.toLowerCase().includes('analyze') ||
+        todo.description.toLowerCase().includes('research') ||
+        todo.description.toLowerCase().includes('identify') ||
+        todo.description.toLowerCase().includes('profile')
+      );
+      
+      const implementationTodos = todos.filter(todo => 
+        todo.description.toLowerCase().includes('implement') ||
+        todo.description.toLowerCase().includes('refactor') ||
+        todo.description.toLowerCase().includes('optimize') ||
+        todo.description.toLowerCase().includes('improve')
+      );
+      
+      const validationTodos = todos.filter(todo => 
+        todo.description.toLowerCase().includes('test') ||
+        todo.description.toLowerCase().includes('validate') ||
+        todo.description.toLowerCase().includes('measure') ||
+        todo.description.toLowerCase().includes('monitor')
+      );
+      
+      const remainingTodos = todos.filter(todo => 
+        !analysisTodos.includes(todo) && 
+        !implementationTodos.includes(todo) && 
+        !validationTodos.includes(todo)
+      );
+
+      if (analysisTodos.length > 0) {
+        groups.push({
+          title: 'Analysis and Research',
+          description: 'Analyze current state and research improvements',
+          priority: 'high',
+          estimatedHours: analysisTodos.length * 1.0,
+          todoIds: analysisTodos.map(t => t.id)
+        });
+      }
+
+      if (implementationTodos.length > 0) {
+        groups.push({
+          title: 'Implementation',
+          description: 'Implement the improvements',
+          priority: 'high',
+          estimatedHours: implementationTodos.length * 1.5,
+          todoIds: implementationTodos.map(t => t.id)
+        });
+      }
+
+      if (validationTodos.length > 0) {
+        groups.push({
+          title: 'Validation and Testing',
+          description: 'Validate improvements and test changes',
+          priority: 'medium',
+          estimatedHours: validationTodos.length * 0.75,
+          todoIds: validationTodos.map(t => t.id)
+        });
+      }
+
+      if (remainingTodos.length > 0) {
+        groups.push({
+          title: 'Additional Tasks',
+          description: 'Other improvement-related tasks',
+          priority: 'medium',
+          estimatedHours: remainingTodos.length * 0.5,
+          todoIds: remainingTodos.map(t => t.id)
+        });
+      }
+    }
+
+    return groups;
+  }
+
+  /**
+   * Assign todos to a subtask
+   */
+  private async assignTodosToSubtask(db: sqlite3.Database, todoIds: string[], subtaskId: string): Promise<void> {
+    for (const todoId of todoIds) {
+      await new Promise<void>((resolve, reject) => {
+        db.run('UPDATE todo_items SET subtaskId = ? WHERE id = ?', [subtaskId, todoId], function(err) {
+          if (err) {
+            reject(new Error(`Failed to assign todo to subtask: ${err.message}`));
+          } else {
+            resolve();
+          }
+        });
+      });
+    }
+  }
+
+  /**
+   * Format subtasks list for display
+   */
+  private formatSubtasksList(subtasks: Subtask[], parentId: string): string {
+    if (subtasks.length === 0) {
+      return `No subtasks found for ${parentId}.`;
+    }
+
+    let output = `Subtasks for ${parentId}:\n\n`;
+    
+    subtasks.forEach((subtask, index) => {
+      const emoji = this.getStatusEmoji(subtask.status);
+      const priority = subtask.priority?.toUpperCase() || 'MEDIUM';
+      const hours = subtask.estimatedHours ? `${subtask.estimatedHours}h` : 'TBD';
+      
+      output += `${index + 1}. ${emoji} ${subtask.title} [${subtask.id}]\n`;
+      output += `   Status: ${subtask.status.toUpperCase()}\n`;
+      output += `   Priority: ${priority}\n`;
+      output += `   Estimated: ${hours}\n`;
+      
+      if (subtask.description) {
+        output += `   Description: ${subtask.description}\n`;
+      }
+      
+      output += '\n';
+    });
+
+    return output;
   }
 
   /**

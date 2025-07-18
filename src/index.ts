@@ -15,6 +15,7 @@ import { SearchManager } from './search.js';
 import { ContextManager } from './context.js';
 import { WorkflowManager } from './workflows.js';
 import { SubtaskManager } from './subtasks.js';
+import { TodoManager } from './todos.js';
 import sqlite3 from 'sqlite3';
 
 class ProjectManagementServer {
@@ -27,6 +28,7 @@ class ProjectManagementServer {
   private contextManager: ContextManager;
   private workflowManager: WorkflowManager;
   private subtaskManager: SubtaskManager;
+  private todoManager: TodoManager;
 
   constructor() {
     this.server = new Server(
@@ -46,6 +48,7 @@ class ProjectManagementServer {
     this.contextManager = new ContextManager();
     this.workflowManager = new WorkflowManager();
     this.subtaskManager = new SubtaskManager();
+    this.todoManager = new TodoManager();
 
     this.setupToolHandlers();
   }
@@ -152,6 +155,16 @@ class ProjectManagementServer {
         estimatedHours REAL,
         actualHours REAL,
         dependencies TEXT,
+        dateCreated TEXT NOT NULL,
+        dateCompleted TEXT,
+        orderIndex INTEGER
+      )`,
+      `CREATE TABLE IF NOT EXISTS todo_items (
+        id TEXT PRIMARY KEY,
+        subtaskId TEXT,
+        parentId TEXT NOT NULL,
+        description TEXT NOT NULL,
+        completed INTEGER DEFAULT 0,
         dateCreated TEXT NOT NULL,
         dateCompleted TEXT,
         orderIndex INTEGER
@@ -293,8 +306,31 @@ class ProjectManagementServer {
         return this.subtaskManager.reorderSubtasks(this.db, args);
       case 'delete':
         return this.subtaskManager.deleteSubtask(this.db, args);
+      case 'generate_from_todos':
+        return this.subtaskManager.generateSubtasksFromTodos(this.db, args);
       default:
         throw new Error(`Unknown subtask operation: ${operation}`);
+    }
+  }
+
+  private async manageTodos(args: any) {
+    const { operation } = args;
+    
+    switch (operation) {
+      case 'create':
+        return this.todoManager.createTodo(this.db, args);
+      case 'list':
+        return this.todoManager.listTodos(this.db, args);
+      case 'toggle':
+        return this.todoManager.toggleTodo(this.db, args);
+      case 'bulk_update':
+        return this.todoManager.bulkToggleTodos(this.db, args);
+      case 'get_stats':
+        return this.todoManager.getTodoCompletion(this.db, args);
+      case 'delete':
+        return this.todoManager.deleteTodo(this.db, args);
+      default:
+        throw new Error(`Unknown todo operation: ${operation}`);
     }
   }
 
@@ -669,7 +705,7 @@ class ProjectManagementServer {
               properties: {
                 operation: {
                   type: 'string',
-                  enum: ['create', 'list', 'update_status', 'get_progress', 'reorder', 'delete'],
+                  enum: ['create', 'list', 'update_status', 'get_progress', 'reorder', 'delete', 'generate_from_todos'],
                   description: 'The subtask operation to perform'
                 },
                 parentId: { type: 'string', description: 'Parent item ID (e.g., Bug #001, FR-001, IMP-001)' },
@@ -702,6 +738,44 @@ class ProjectManagementServer {
                   type: 'array', 
                   items: { type: 'string' }, 
                   description: 'Array of subtask IDs in desired order (for reorder operation)' 
+                }
+              },
+              required: ['operation'],
+              additionalProperties: false
+            }
+          },
+          {
+            name: 'manage_todos',
+            description: 'Manage todo items - create, list, toggle completion, get statistics, and generate from tasks',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                operation: {
+                  type: 'string',
+                  enum: ['create', 'list', 'toggle', 'bulk_update', 'get_stats', 'delete', 'generate_from_task'],
+                  description: 'The todo operation to perform'
+                },
+                subtaskId: { type: 'string', description: 'Subtask ID (e.g., Bug #001-01, FR-001-02)' },
+                parentId: { type: 'string', description: 'Parent item ID (e.g., Bug #001, FR-001, IMP-001)' },
+                parentType: { 
+                  type: 'string', 
+                  enum: ['bug', 'feature', 'improvement'], 
+                  description: 'Type of parent item (required for generate_from_task operation)' 
+                },
+                description: { type: 'string', description: 'Todo description (for create operation)' },
+                todoId: { type: 'string', description: 'Todo ID (for toggle/delete operations)' },
+                completed: { type: 'boolean', description: 'Filter by completion status (for list operation)' },
+                updates: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      todoId: { type: 'string' },
+                      completed: { type: 'boolean' }
+                    },
+                    required: ['todoId', 'completed']
+                  },
+                  description: 'Array of todo updates (for bulk_update operation)'
                 }
               },
               required: ['operation'],
@@ -769,6 +843,10 @@ class ProjectManagementServer {
 
           case 'manage_subtasks':
             result = await this.withTransaction(() => this.manageSubtasks(args));
+            break;
+
+          case 'manage_todos':
+            result = await this.withTransaction(() => this.manageTodos(args));
             break;
 
           default:
