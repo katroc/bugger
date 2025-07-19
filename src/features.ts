@@ -35,6 +35,17 @@ export class FeatureManager {
   async createFeatureRequest(db: sqlite3.Database, args: any): Promise<string> {
     this.tokenTracker.startOperation('create_feature_request');
     
+    // Validate required fields
+    if (!args.currentBehavior) {
+      throw new Error('currentBehavior is required for feature requests');
+    }
+    if (!args.userStory) {
+      throw new Error('userStory is required for feature requests');
+    }
+    if (!args.expectedBehavior) {
+      throw new Error('expectedBehavior is required for feature requests');
+    }
+    
     // Generate ID before creating feature object to avoid race conditions
     const featureId = args.featureId || await this.generateNextIdWithRetry(db, 'feature');
     

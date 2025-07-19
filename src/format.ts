@@ -1,27 +1,94 @@
 import chalk from 'chalk';
 
+// Try to force chalk to use colors, but provide fallback
+const FORCE_COLORS = process.env.FORCE_COLOR !== '0';
+if (FORCE_COLORS) {
+  chalk.level = 3; // Force highest color support level
+}
+
+// Fallback visual indicators when colors don't work
+const visualIndicators = {
+  critical: '🚨',
+  high: '⚠️',
+  medium: 'ℹ️',
+  low: '📝',
+  open: '🔴',
+  proposed: '🔴',
+  progress: '🟡',
+  development: '🟡',
+  completed: '✅',
+  fixed: '✅',
+  closed: '⚫',
+  rejected: '⚫'
+};
+
 // Color and formatting utilities for MCP output
 const colors = {
-  // Status colors
-  red: (text: string) => chalk.red(text),
-  green: (text: string) => chalk.green(text),
-  yellow: (text: string) => chalk.yellow(text),
-  blue: (text: string) => chalk.blue(text),
-  orange: (text: string) => chalk.hex('#FFA500')(text),
-  purple: (text: string) => chalk.magenta(text),
+  // Status colors with fallback
+  red: (text: string) => {
+    const colored = chalk.red(text);
+    return colored !== text ? colored : `🔴 ${text}`;
+  },
+  green: (text: string) => {
+    const colored = chalk.green(text);
+    return colored !== text ? colored : `🟢 ${text}`;
+  },
+  yellow: (text: string) => {
+    const colored = chalk.yellow(text);
+    return colored !== text ? colored : `🟡 ${text}`;
+  },
+  blue: (text: string) => {
+    const colored = chalk.blue(text);
+    return colored !== text ? colored : `🔵 ${text}`;
+  },
+  orange: (text: string) => {
+    const colored = chalk.hex('#FFA500')(text);
+    return colored !== text ? colored : `🟠 ${text}`;
+  },
+  purple: (text: string) => {
+    const colored = chalk.magenta(text);
+    return colored !== text ? colored : `🟣 ${text}`;
+  },
   
-  // Priority colors
-  critical: (text: string) => chalk.bold.red(text),
-  high: (text: string) => chalk.bold.yellow(text),
-  medium: (text: string) => chalk.blue(text),
-  low: (text: string) => chalk.gray(text),
+  // Priority colors with fallback
+  critical: (text: string) => {
+    const colored = chalk.bold.red(text);
+    return colored !== text ? colored : `🚨 ${text}`;
+  },
+  high: (text: string) => {
+    const colored = chalk.bold.yellow(text);
+    return colored !== text ? colored : `⚠️ ${text}`;
+  },
+  medium: (text: string) => {
+    const colored = chalk.blue(text);
+    return colored !== text ? colored : `ℹ️ ${text}`;
+  },
+  low: (text: string) => {
+    const colored = chalk.gray(text);
+    return colored !== text ? colored : `📝 ${text}`;
+  },
   
-  // General formatting
-  highlight: (text: string) => chalk.bold.cyan(text),
-  success: (text: string) => chalk.green(text),
-  info: (text: string) => chalk.cyan(text),
-  warning: (text: string) => chalk.yellow(text),
-  error: (text: string) => chalk.red(text)
+  // General formatting with fallback
+  highlight: (text: string) => {
+    const colored = chalk.bold.cyan(text);
+    return colored !== text ? colored : `✨ ${text}`;
+  },
+  success: (text: string) => {
+    const colored = chalk.green(text);
+    return colored !== text ? colored : `✅ ${text}`;
+  },
+  info: (text: string) => {
+    const colored = chalk.cyan(text);
+    return colored !== text ? colored : `ℹ️ ${text}`;
+  },
+  warning: (text: string) => {
+    const colored = chalk.yellow(text);
+    return colored !== text ? colored : `⚠️ ${text}`;
+  },
+  error: (text: string) => {
+    const colored = chalk.red(text);
+    return colored !== text ? colored : `❌ ${text}`;
+  }
 };
 
 // Unified output formatting interface
