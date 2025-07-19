@@ -28,6 +28,7 @@
   "homepage": "https://github.com/katroc/bugger#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.4.0",
+    "chalk": "^5.4.1",
     "sqlite-vec": "^0.1.2",
     "sqlite3": "^5.1.7",
     "tree-sitter": "^0.21.1",

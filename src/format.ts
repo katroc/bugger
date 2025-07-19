@@ -1,25 +1,27 @@
+import chalk from 'chalk';
+
 // Color and formatting utilities for MCP output
 const colors = {
   // Status colors
-  red: (text: string) => `🔴 ${text}`,
-  green: (text: string) => `🟢 ${text}`,
-  yellow: (text: string) => `🟡 ${text}`,
-  blue: (text: string) => `🔵 ${text}`,
-  orange: (text: string) => `🟠 ${text}`,
-  purple: (text: string) => `🟣 ${text}`,
+  red: (text: string) => chalk.red(text),
+  green: (text: string) => chalk.green(text),
+  yellow: (text: string) => chalk.yellow(text),
+  blue: (text: string) => chalk.blue(text),
+  orange: (text: string) => chalk.hex('#FFA500')(text),
+  purple: (text: string) => chalk.magenta(text),
   
   // Priority colors
-  critical: (text: string) => `🚨 ${text}`,
-  high: (text: string) => `⚠️ ${text}`,
-  medium: (text: string) => `📋 ${text}`,
-  low: (text: string) => `📝 ${text}`,
+  critical: (text: string) => chalk.bold.red(text),
+  high: (text: string) => chalk.bold.yellow(text),
+  medium: (text: string) => chalk.blue(text),
+  low: (text: string) => chalk.gray(text),
   
   // General formatting
-  highlight: (text: string) => `✨ ${text}`,
-  success: (text: string) => `✅ ${text}`,
-  info: (text: string) => `ℹ️ ${text}`,
-  warning: (text: string) => `⚠️ ${text}`,
-  error: (text: string) => `❌ ${text}`
+  highlight: (text: string) => chalk.bold.cyan(text),
+  success: (text: string) => chalk.green(text),
+  info: (text: string) => chalk.cyan(text),
+  warning: (text: string) => chalk.yellow(text),
+  error: (text: string) => chalk.red(text)
 };
 
 // Unified output formatting interface
@@ -170,22 +172,21 @@ export function getPriorityFormatter(): (priority: string) => string {
 }
 
 /**
- * Get status formatter with emojis
+ * Get status formatter with colors
  */
 export function getStatusFormatter(): (status: string) => string {
   return (status: string) => {
     const statusLower = status?.toLowerCase() || '';
-    let emoji = '';
     
-    if (statusLower.includes('open') || statusLower === 'proposed') emoji = '🔴';
-    else if (statusLower.includes('progress') || statusLower.includes('development')) emoji = '🔄';
-    else if (statusLower.includes('fixed') || statusLower.includes('completed') || statusLower === 'done') emoji = '✅';
-    else if (statusLower.includes('closed') || statusLower === 'rejected') emoji = '⚫';
-    else if (statusLower.includes('blocked')) emoji = '🚫';
-    else if (statusLower.includes('discussion') || statusLower.includes('research')) emoji = '💬';
-    else if (statusLower.includes('approved')) emoji = '👍';
+    if (statusLower.includes('open') || statusLower === 'proposed') return chalk.red(status);
+    else if (statusLower.includes('progress') || statusLower.includes('development')) return chalk.yellow(status);
+    else if (statusLower.includes('fixed') || statusLower.includes('completed') || statusLower === 'done') return chalk.green(status);
+    else if (statusLower.includes('closed') || statusLower === 'rejected') return chalk.gray(status);
+    else if (statusLower.includes('blocked')) return chalk.red.bold(status);
+    else if (statusLower.includes('discussion') || statusLower.includes('research')) return chalk.blue(status);
+    else if (statusLower.includes('approved')) return chalk.green.bold(status);
     
-    return emoji ? `${emoji} ${status}` : status;
+    return status;
   };
 }
 
