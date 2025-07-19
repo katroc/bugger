@@ -37,8 +37,11 @@ export class FeatureManager {
   async createFeatureRequest(db: sqlite3.Database, args: any): Promise<string> {
     this.tokenTracker.startOperation('create_feature_request');
     
+    // Generate ID before creating feature object to avoid race conditions
+    const featureId = args.featureId || await this.generateNextIdWithRetry(db, 'feature');
+    
     const feature: FeatureRequest = {
-      id: args.featureId || await this.generateNextId(db, 'feature'),
+      id: featureId,
       status: 'Proposed',
       priority: args.priority || 'Medium',
       dateRequested: new Date().toISOString().split('T')[0],
@@ -377,6 +380,24 @@ export class FeatureManager {
         }
       });
     });
+  }
+
+  /**
+   * Generate next ID for feature with retry mechanism for race conditions
+   */
+  private async generateNextIdWithRetry(db: sqlite3.Database, type: 'feature', retryCount = 0): Promise<string> {
+    const maxRetries = 3;
+    
+    try {
+      return await this.generateNextId(db, type);
+    } catch (error) {
+      if (retryCount < maxRetries && error instanceof Error && error.message.includes('UNIQUE constraint')) {
+        // Wait a bit and retry
+        await new Promise(resolve => setTimeout(resolve, Math.random() * 100 + 50));
+        return this.generateNextIdWithRetry(db, type, retryCount + 1);
+      }
+      throw error;
+    }
   }
 
   /**

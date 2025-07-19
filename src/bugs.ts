@@ -37,51 +37,82 @@ export class BugManager {
     const startTime = Date.now();
     this.tokenTracker.startOperation('create_bug');
     
-    const bug: Bug = {
-      id: args.bugId || await this.generateNextId(db, 'bug'),
-      status: 'Open',
-      priority: args.priority || 'Medium',
-      dateReported: new Date().toISOString().split('T')[0],
-      component: args.component || 'General',
-      title: args.title,
-      description: args.description,
-      expectedBehavior: args.expectedBehavior,
-      actualBehavior: args.actualBehavior,
-      potentialRootCause: args.potentialRootCause,
-      filesLikelyInvolved: args.filesLikelyInvolved || [],
-      stepsToReproduce: args.stepsToReproduce || [],
-      verification: [],
-      humanVerified: false
-    };
+    return this.createBugWithRetry(db, args, 0);
+  }
 
-    return new Promise((resolve, reject) => {
-      const insertQuery = `
-        INSERT INTO bugs (
-          id, status, priority, dateReported, component, title, description, 
-          expectedBehavior, actualBehavior, potentialRootCause, filesLikelyInvolved, 
-          stepsToReproduce, verification, humanVerified
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `;
+  /**
+   * Create bug with retry mechanism to handle race conditions
+   */
+  private async createBugWithRetry(db: sqlite3.Database, args: any, retryCount: number): Promise<string> {
+    const maxRetries = 3;
+    
+    try {
+      return await this.createBugAttempt(db, args);
+    } catch (error) {
+      if (retryCount < maxRetries && error instanceof Error && error.message.includes('UNIQUE constraint failed')) {
+        // Wait a bit and retry with a new ID
+        await new Promise(resolve => setTimeout(resolve, Math.random() * 100 + 50));
+        return this.createBugWithRetry(db, args, retryCount + 1);
+      }
+      throw error;
+    }
+  }
 
-      db.run(insertQuery, [
-        bug.id,
-        bug.status,
-        bug.priority,
-        bug.dateReported,
-        bug.component,
-        bug.title,
-        bug.description,
-        bug.expectedBehavior,
-        bug.actualBehavior,
-        bug.potentialRootCause,
-        JSON.stringify(bug.filesLikelyInvolved),
-        JSON.stringify(bug.stepsToReproduce),
-        JSON.stringify(bug.verification),
-        bug.humanVerified ? 1 : 0
-      ], async (err) => {
-        if (err) {
-          reject(new Error(`Failed to create bug: ${err.message}`));
-        } else {
+  /**
+   * Single attempt to create a bug
+   */
+  private async createBugAttempt(db: sqlite3.Database, args: any): Promise<string> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        // Generate ID
+        const bugId = args.bugId || await this.generateNextId(db, 'bug');
+        
+        const bug: Bug = {
+          id: bugId,
+          status: 'Open',
+          priority: args.priority || 'Medium',
+          dateReported: new Date().toISOString().split('T')[0],
+          component: args.component || 'General',
+          title: args.title,
+          description: args.description,
+          expectedBehavior: args.expectedBehavior,
+          actualBehavior: args.actualBehavior,
+          potentialRootCause: args.potentialRootCause,
+          filesLikelyInvolved: args.filesLikelyInvolved || [],
+          stepsToReproduce: args.stepsToReproduce || [],
+          verification: [],
+          humanVerified: false
+        };
+
+        const insertQuery = `
+          INSERT INTO bugs (
+            id, status, priority, dateReported, component, title, description, 
+            expectedBehavior, actualBehavior, potentialRootCause, filesLikelyInvolved, 
+            stepsToReproduce, verification, humanVerified
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+
+        db.run(insertQuery, [
+          bug.id,
+          bug.status,
+          bug.priority,
+          bug.dateReported,
+          bug.component,
+          bug.title,
+          bug.description,
+          bug.expectedBehavior,
+          bug.actualBehavior,
+          bug.potentialRootCause,
+          JSON.stringify(bug.filesLikelyInvolved),
+          JSON.stringify(bug.stepsToReproduce),
+          JSON.stringify(bug.verification),
+          bug.humanVerified ? 1 : 0
+        ], async (insertErr) => {
+          if (insertErr) {
+            reject(new Error(`Failed to create bug: ${insertErr.message}`));
+            return;
+          }
+
           try {
             // Auto-generate subtasks and todos immediately after bug creation
             const subtaskManager = new SubtaskManager();
@@ -115,19 +146,14 @@ export class BugManager {
             const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_bug');
             
             resolve(`Bug ${bug.id} created successfully with ${subtasks.length} subtasks and associated todos.${formatTokenUsage(tokenUsage)}`);
+            
           } catch (autoGenError) {
-            // If auto-generation fails, still return success for the bug creation
-            console.warn(`Auto-generation failed for bug ${bug.id}:`, autoGenError);
-            
-            const endTime = Date.now();
-            const inputText = JSON.stringify(args);
-            const outputText = `Created bug ${bug.id} (auto-generation failed)`;
-            const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_bug');
-            
-            resolve(`Bug ${bug.id} created successfully (note: auto-generation of subtasks/todos failed).${formatTokenUsage(tokenUsage)}`);
+            reject(new Error(`Auto-generation failed for bug ${bug.id}: ${autoGenError instanceof Error ? autoGenError.message : 'Unknown error'}`));
           }
-        }
-      });
+        });
+      } catch (err) {
+        reject(new Error(`Bug creation failed: ${err instanceof Error ? err.message : 'Unknown error'}`));
+      }
     });
   }
 
@@ -384,11 +410,29 @@ export class BugManager {
   }
 
   /**
+   * Generate next ID for bug with retry mechanism for race conditions
+   */
+  private async generateNextIdWithRetry(db: sqlite3.Database, retryCount = 0): Promise<string> {
+    const maxRetries = 3;
+    
+    try {
+      return await this.generateNextId(db, 'bug');
+    } catch (error) {
+      if (retryCount < maxRetries && error instanceof Error && error.message.includes('UNIQUE constraint')) {
+        // Wait a bit and retry
+        await new Promise(resolve => setTimeout(resolve, Math.random() * 100 + 50));
+        return this.generateNextIdWithRetry(db, retryCount + 1);
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Generate next ID for bug
    */
   private async generateNextId(db: sqlite3.Database, type: 'bug'): Promise<string> {
     return new Promise((resolve, reject) => {
-      db.get('SELECT MAX(CAST(SUBSTR(id, 5) AS INTEGER)) as maxId FROM bugs', [], (err, row: any) => {
+      db.get('SELECT MAX(CAST(SUBSTR(id, 6) AS INTEGER)) as maxId FROM bugs', [], (err, row: any) => {
         if (err) {
           reject(new Error(`Failed to generate ID: ${err.message}`));
         } else {

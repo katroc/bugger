@@ -42,7 +42,7 @@ export class ImprovementManager {
     this.tokenTracker.startOperation('create_improvement');
     
     const improvement: Improvement = {
-      id: args.improvementId || await this.generateNextId(db, 'improvement'),
+      id: args.improvementId || await this.generateNextIdWithRetry(db, 'improvement'),
       status: 'Proposed',
       priority: args.priority || 'Medium',
       dateRequested: new Date().toISOString().split('T')[0],
@@ -508,6 +508,24 @@ export class ImprovementManager {
         }
       });
     });
+  }
+
+  /**
+   * Generate next ID for improvement with retry mechanism for race conditions
+   */
+  private async generateNextIdWithRetry(db: sqlite3.Database, type: 'improvement', retryCount = 0): Promise<string> {
+    const maxRetries = 3;
+    
+    try {
+      return await this.generateNextId(db, type);
+    } catch (error) {
+      if (retryCount < maxRetries && error instanceof Error && error.message.includes('UNIQUE constraint')) {
+        // Wait a bit and retry
+        await new Promise(resolve => setTimeout(resolve, Math.random() * 100 + 50));
+        return this.generateNextIdWithRetry(db, type, retryCount + 1);
+      }
+      throw error;
+    }
   }
 
   /**
