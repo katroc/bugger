@@ -1,5 +1,5 @@
 // Context collection engine that orchestrates pattern matching and dependency analysis
-import { CodePatternMatcher, FunctionMatch, ClassMatch, PatternMatch } from './code-pattern-matching.js';
+import { TreeSitterCodeAnalyzer, FunctionMatch, ClassMatch, PatternMatch } from './treesitter-code-analyzer.js';
 import { DependencyAnalyzer, DependencyGraph, FileRelationship } from './dependency-analysis.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -100,7 +100,7 @@ export interface TaskAnalysisInput {
  * Main context collection engine that orchestrates all analysis components
  */
 export class ContextCollectionEngine {
-  private patternMatcher: CodePatternMatcher;
+  private codeAnalyzer: TreeSitterCodeAnalyzer;
   private dependencyAnalyzer: DependencyAnalyzer;
   private config: ContextCollectionConfig;
   private contextCache: Map<string, CodeContext[]> = new Map();
@@ -109,7 +109,7 @@ export class ContextCollectionEngine {
     rootPath: string = process.cwd(),
     config: Partial<ContextCollectionConfig> = {}
   ) {
-    this.patternMatcher = new CodePatternMatcher(rootPath);
+    this.codeAnalyzer = new TreeSitterCodeAnalyzer(rootPath);
     this.dependencyAnalyzer = new DependencyAnalyzer(rootPath);
     this.config = this.mergeWithDefaultConfig(config);
   }
@@ -425,20 +425,20 @@ export class ContextCollectionEngine {
     for (const entity of textAnalysis.entities) {
       // Check if entity looks like a function (contains parentheses or common function patterns)
       if (entity.includes('(') || /^[a-z][a-zA-Z0-9]*$/.test(entity)) {
-        const functionMatches = await this.patternMatcher.findFunctionDefinitions(entity.replace(/\s*\(.*$/, ''));
+        const functionMatches = await this.codeAnalyzer.findFunctionDefinitions(entity.replace(/\s*\(.*$/, ''));
         functions.push(...functionMatches);
       }
       
       // Check if entity looks like a class (starts with capital letter)
       if (/^[A-Z][a-zA-Z0-9]*$/.test(entity)) {
-        const classMatches = await this.patternMatcher.findClassDefinitions(entity);
+        const classMatches = await this.codeAnalyzer.findClassDefinitions(entity);
         classes.push(...classMatches);
       }
     }
     
     // Find similar patterns based on combined text
     if (textAnalysis.combinedText.length > 50) {
-      const similarPatterns = await this.patternMatcher.findSimilarPatterns(textAnalysis.combinedText);
+      const similarPatterns = await this.codeAnalyzer.findSimilarPatterns(textAnalysis.combinedText);
       patterns.push(...similarPatterns);
     }
     
