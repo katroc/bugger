@@ -351,7 +351,18 @@ class ProjectManagementServer {
               type: 'object',
               properties: {
                 itemId: { type: 'string', description: 'Item ID (e.g., Bug #001, FR-001, IMP-001)' },
-                status: { type: 'string', description: 'New status (valid values depend on item type)' },
+                status: { 
+                  type: 'string', 
+                  description: 'New status. For bugs: Open, In Progress, Fixed, Closed, Temporarily Resolved. For features: Proposed, In Discussion, Approved, In Development, Research Phase, Partially Implemented, Completed, Rejected. For improvements: Proposed, In Discussion, Approved, In Development, Completed (Awaiting Human Verification), Completed, Rejected',
+                  enum: [
+                    // Bug statuses
+                    'Open', 'In Progress', 'Fixed', 'Closed', 'Temporarily Resolved',
+                    // Feature statuses  
+                    'Proposed', 'In Discussion', 'Approved', 'In Development', 'Research Phase', 'Partially Implemented', 'Completed', 'Rejected',
+                    // Improvement statuses (includes 'Completed (Awaiting Human Verification)')
+                    'Completed (Awaiting Human Verification)'
+                  ]
+                },
                 humanVerified: { type: 'boolean', description: 'Whether human verification is complete (bugs only)' },
                 dateCompleted: { type: 'string', description: 'Completion date YYYY-MM-DD (improvements only)' }
               },
@@ -466,7 +477,18 @@ class ProjectManagementServer {
                     type: 'object',
                     properties: {
                       itemId: { type: 'string', description: 'Item ID (e.g., Bug #001, FR-001, IMP-001)' },
-                      status: { type: 'string', description: 'New status (valid values depend on item type)' },
+                      status: { 
+                        type: 'string', 
+                        description: 'New status. For bugs: Open, In Progress, Fixed, Closed, Temporarily Resolved. For features: Proposed, In Discussion, Approved, In Development, Research Phase, Partially Implemented, Completed, Rejected. For improvements: Proposed, In Discussion, Approved, In Development, Completed (Awaiting Human Verification), Completed, Rejected',
+                        enum: [
+                          // Bug statuses
+                          'Open', 'In Progress', 'Fixed', 'Closed', 'Temporarily Resolved',
+                          // Feature statuses  
+                          'Proposed', 'In Discussion', 'Approved', 'In Development', 'Research Phase', 'Partially Implemented', 'Completed', 'Rejected',
+                          // Improvement statuses (includes 'Completed (Awaiting Human Verification)')
+                          'Completed (Awaiting Human Verification)'
+                        ]
+                      },
                       humanVerified: { type: 'boolean', description: 'Whether human verification is complete (bugs only)' },
                       dateCompleted: { type: 'string', description: 'Completion date YYYY-MM-DD (improvements only)' }
                     },
