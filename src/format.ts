@@ -1,94 +1,30 @@
 import chalk from 'chalk';
 
-// Try to force chalk to use colors, but provide fallback
-const FORCE_COLORS = process.env.FORCE_COLOR !== '0';
-if (FORCE_COLORS) {
-  chalk.level = 3; // Force highest color support level
-}
+// Disable colors in MCP environment since they show as codes
+chalk.level = 0;
 
-// Fallback visual indicators when colors don't work
-const visualIndicators = {
-  critical: '🚨',
-  high: '⚠️',
-  medium: 'ℹ️',
-  low: '📝',
-  open: '🔴',
-  proposed: '🔴',
-  progress: '🟡',
-  development: '🟡',
-  completed: '✅',
-  fixed: '✅',
-  closed: '⚫',
-  rejected: '⚫'
-};
-
-// Color and formatting utilities for MCP output
+// Color and formatting utilities for MCP output - simplified without colors
 const colors = {
-  // Status colors with fallback
-  red: (text: string) => {
-    const colored = chalk.red(text);
-    return colored !== text ? colored : `🔴 ${text}`;
-  },
-  green: (text: string) => {
-    const colored = chalk.green(text);
-    return colored !== text ? colored : `🟢 ${text}`;
-  },
-  yellow: (text: string) => {
-    const colored = chalk.yellow(text);
-    return colored !== text ? colored : `🟡 ${text}`;
-  },
-  blue: (text: string) => {
-    const colored = chalk.blue(text);
-    return colored !== text ? colored : `🔵 ${text}`;
-  },
-  orange: (text: string) => {
-    const colored = chalk.hex('#FFA500')(text);
-    return colored !== text ? colored : `🟠 ${text}`;
-  },
-  purple: (text: string) => {
-    const colored = chalk.magenta(text);
-    return colored !== text ? colored : `🟣 ${text}`;
-  },
+  // Status colors - no colors, just return text
+  red: (text: string) => text,
+  green: (text: string) => text,
+  yellow: (text: string) => text,
+  blue: (text: string) => text,
+  orange: (text: string) => text,
+  purple: (text: string) => text,
   
-  // Priority colors with fallback
-  critical: (text: string) => {
-    const colored = chalk.bold.red(text);
-    return colored !== text ? colored : `🚨 ${text}`;
-  },
-  high: (text: string) => {
-    const colored = chalk.bold.yellow(text);
-    return colored !== text ? colored : `⚠️ ${text}`;
-  },
-  medium: (text: string) => {
-    const colored = chalk.blue(text);
-    return colored !== text ? colored : `ℹ️ ${text}`;
-  },
-  low: (text: string) => {
-    const colored = chalk.gray(text);
-    return colored !== text ? colored : `📝 ${text}`;
-  },
+  // Priority colors - no colors, just return text
+  critical: (text: string) => text,
+  high: (text: string) => text,
+  medium: (text: string) => text,
+  low: (text: string) => text,
   
-  // General formatting with fallback
-  highlight: (text: string) => {
-    const colored = chalk.bold.cyan(text);
-    return colored !== text ? colored : `✨ ${text}`;
-  },
-  success: (text: string) => {
-    const colored = chalk.green(text);
-    return colored !== text ? colored : `✅ ${text}`;
-  },
-  info: (text: string) => {
-    const colored = chalk.cyan(text);
-    return colored !== text ? colored : `ℹ️ ${text}`;
-  },
-  warning: (text: string) => {
-    const colored = chalk.yellow(text);
-    return colored !== text ? colored : `⚠️ ${text}`;
-  },
-  error: (text: string) => {
-    const colored = chalk.red(text);
-    return colored !== text ? colored : `❌ ${text}`;
-  }
+  // General formatting - no colors, just return text
+  highlight: (text: string) => text,
+  success: (text: string) => text,
+  info: (text: string) => text,
+  warning: (text: string) => text,
+  error: (text: string) => text
 };
 
 // Unified output formatting interface
