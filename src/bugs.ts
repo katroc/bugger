@@ -1,6 +1,8 @@
 // Bug management operations
-import { formatBugs, formatBulkUpdateResults } from './format.js';
+import { formatBugs, formatBulkUpdateResults, formatTokenUsage } from './format.js';
 import { TokenUsageTracker } from './token-usage-tracker.js';
+import { SubtaskManager } from './subtasks.js';
+import { TodoManager } from './todos.js';
 import sqlite3 from 'sqlite3';
 
 // Bug interface
@@ -76,17 +78,54 @@ export class BugManager {
         JSON.stringify(bug.stepsToReproduce),
         JSON.stringify(bug.verification),
         bug.humanVerified ? 1 : 0
-      ], (err) => {
+      ], async (err) => {
         if (err) {
           reject(new Error(`Failed to create bug: ${err.message}`));
         } else {
-          // Record token usage
-          const endTime = Date.now();
-          const inputText = JSON.stringify(args);
-          const outputText = `Created bug ${bug.id}`;
-          const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_bug');
-          
-          resolve(`Bug ${bug.id} created successfully.\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`);
+          try {
+            // Auto-generate subtasks and todos immediately after bug creation
+            const subtaskManager = new SubtaskManager();
+            const todoManager = new TodoManager();
+            
+            // Generate subtasks for the new bug
+            await subtaskManager.autoGenerateSubtasks(db, bug.id, 'bug', {
+              title: bug.title,
+              description: bug.description,
+              expectedBehavior: bug.expectedBehavior,
+              actualBehavior: bug.actualBehavior,
+              filesLikelyInvolved: bug.filesLikelyInvolved,
+              potentialRootCause: bug.potentialRootCause
+            });
+            
+            // Get the generated subtasks to create todos for each
+            const subtasks = await this.getSubtasksForBug(db, bug.id);
+            
+            // Generate todos for each subtask
+            for (const subtask of subtasks) {
+              await todoManager.autoGenerateTodos(db, subtask.id, bug.id, 'bug', {
+                title: subtask.title,
+                description: subtask.description
+              });
+            }
+            
+            // Record token usage
+            const endTime = Date.now();
+            const inputText = JSON.stringify(args);
+            const outputText = `Created bug ${bug.id} with ${subtasks.length} subtasks and associated todos`;
+            const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_bug');
+            
+            resolve(`Bug ${bug.id} created successfully with ${subtasks.length} subtasks and associated todos.${formatTokenUsage(tokenUsage)}`);
+          } catch (autoGenError) {
+            // If auto-generation fails, still return success for the bug creation
+            console.warn(`Auto-generation failed for bug ${bug.id}:`, autoGenError);
+            
+            const endTime = Date.now();
+            const inputText = JSON.stringify(args);
+            const outputText = `Created bug ${bug.id} (auto-generation failed)`;
+            const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_bug');
+            
+            resolve(`Bug ${bug.id} created successfully (note: auto-generation of subtasks/todos failed).${formatTokenUsage(tokenUsage)}`);
+          }
         }
       });
     });
@@ -326,6 +365,22 @@ export class BugManager {
     const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'bulk_update_bug_status');
     
     return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+  }
+
+  /**
+   * Get subtasks for a bug (helper for auto-generation)
+   */
+  private async getSubtasksForBug(db: sqlite3.Database, bugId: string): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      const query = 'SELECT * FROM subtasks WHERE parentId = ? ORDER BY orderIndex';
+      db.all(query, [bugId], (err, rows) => {
+        if (err) {
+          reject(new Error(`Failed to get subtasks: ${err.message}`));
+        } else {
+          resolve(rows || []);
+        }
+      });
+    });
   }
 
   /**

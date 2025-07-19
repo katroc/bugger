@@ -1,5 +1,6 @@
 // Todo management operations for subtasks
 import { TokenUsageTracker } from './token-usage-tracker.js';
+import { formatTokenUsage } from './format.js';
 import sqlite3 from 'sqlite3';
 
 export interface Todo {
@@ -133,7 +134,7 @@ export class TodoManager {
       const outputText = formattedOutput;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'list_todos');
       
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to list todos: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -195,7 +196,7 @@ export class TodoManager {
       const outputText = `Todo ${todoId} created successfully.`;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_todo');
       
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to create todo: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -249,7 +250,7 @@ export class TodoManager {
       const outputText = `Todo ${todoId} ${status}.`;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'toggle_todo');
       
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to toggle todo: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -285,7 +286,7 @@ export class TodoManager {
       const outputText = `Todo ${todoId} updated successfully.`;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'update_todo');
       
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to update todo: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -321,7 +322,7 @@ export class TodoManager {
       const outputText = `Todo ${todoId} deleted successfully.`;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'delete_todo');
       
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to delete todo: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -389,7 +390,7 @@ export class TodoManager {
       const outputText = `${updatedCount} todos ${status} successfully.`;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'bulk_toggle_todos');
       
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       // Rollback on error
       await new Promise<void>((resolve) => {
@@ -455,7 +456,7 @@ export class TodoManager {
       const outputText = formattedOutput;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'get_todo_completion');
       
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to get todo completion: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -477,7 +478,7 @@ export class TodoManager {
       // Check if todos already exist for this task
       const existingTodos = await this.getExistingTodosForTask(db, parentId);
       if (existingTodos.length > 0) {
-        return this.formatTodoList(existingTodos, parentId);
+        return this.formatTodosList(existingTodos, parentId);
       }
 
       // Get parent task details
@@ -538,14 +539,14 @@ export class TodoManager {
       }
 
       // Format and return the list
-      const formattedOutput = this.formatTodoList(createdTodos, parentId);
+      const formattedOutput = this.formatTodosList(createdTodos, parentId);
       
       // Record token usage
       const inputText = JSON.stringify(args);
       const outputText = formattedOutput;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'generate_todos_from_task');
       
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to generate todos from task: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -556,7 +557,7 @@ export class TodoManager {
   /**
    * Auto-generate todos for a subtask based on its content
    */
-  private async autoGenerateTodos(db: sqlite3.Database, subtaskId: string): Promise<Todo[]> {
+  async autoGenerateTodos(db: sqlite3.Database, subtaskId: string, parentId?: string, parentType?: string, taskData?: any): Promise<Todo[]> {
     try {
       // Get subtask details
       const subtask = await this.getSubtaskDetails(db, subtaskId);
@@ -1034,25 +1035,4 @@ export class TodoManager {
   /**
    * Format todo list for display
    */
-  private formatTodoList(todos: Todo[], target: string): string {
-    if (todos.length === 0) {
-      return `No todos found for ${target}.`;
-    }
-
-    let output = `Todos for ${target}:\n\n`;
-    
-    todos.forEach((todo, index) => {
-      const checkbox = todo.completed ? '✅' : '☐';
-      output += `${index + 1}. ${checkbox} ${todo.description} [${todo.id}]\n`;
-      
-      if (todo.completed && todo.dateCompleted) {
-        const completedDate = new Date(todo.dateCompleted).toLocaleDateString();
-        output += `   Completed: ${completedDate}\n`;
-      }
-      
-      output += '\n';
-    });
-
-    return output;
-  }
 }

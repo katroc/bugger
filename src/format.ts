@@ -22,6 +22,173 @@ const colors = {
   error: (text: string) => `❌ ${text}`
 };
 
+// Unified output formatting interface
+interface OutputOptions {
+  includeHeaders?: boolean;
+  maxContentLength?: number;
+  showMetadata?: boolean;
+  showTokenUsage?: boolean;
+}
+
+interface TableColumn {
+  key: string;
+  header: string;
+  width?: number;
+  align?: 'left' | 'center' | 'right';
+  formatter?: (value: any) => string;
+}
+
+/**
+ * Unified table formatter for consistent output across all tools
+ */
+export function formatTable(data: any[], columns: TableColumn[], options: OutputOptions = {}): string {
+  if (data.length === 0) {
+    return "No items found.";
+  }
+
+  const { includeHeaders = true, maxContentLength = 50 } = options;
+  
+  // Calculate column widths
+  const columnWidths = columns.map(col => {
+    const headerWidth = col.header.length;
+    const contentWidth = Math.max(...data.map(item => {
+      const value = col.formatter ? col.formatter(item[col.key]) : String(item[col.key] || '');
+      return Math.min(value.length, maxContentLength);
+    }));
+    return Math.max(headerWidth, contentWidth, col.width || 0);
+  });
+
+  let output = '';
+  
+  // Add headers
+  if (includeHeaders) {
+    const headerRow = columns.map((col, i) => {
+      const padding = columnWidths[i] - col.header.length;
+      return col.header + ' '.repeat(Math.max(0, padding));
+    }).join('  |  ');
+    
+    const separator = columns.map((_, i) => '-'.repeat(columnWidths[i])).join('--|--');
+    
+    output += headerRow + '\n';
+    output += separator + '\n';
+  }
+  
+  // Add data rows
+  data.forEach(item => {
+    const row = columns.map((col, i) => {
+      let value = col.formatter ? col.formatter(item[col.key]) : String(item[col.key] || '');
+      
+      // Truncate long content
+      if (value.length > maxContentLength) {
+        value = value.substring(0, maxContentLength - 3) + '...';
+      }
+      
+      const padding = columnWidths[i] - value.length;
+      const align = col.align || 'left';
+      
+      switch (align) {
+        case 'right':
+          return ' '.repeat(Math.max(0, padding)) + value;
+        case 'center':
+          const leftPad = Math.floor(padding / 2);
+          const rightPad = padding - leftPad;
+          return ' '.repeat(leftPad) + value + ' '.repeat(rightPad);
+        default: // left
+          return value + ' '.repeat(Math.max(0, padding));
+      }
+    }).join('  |  ');
+    
+    output += row + '\n';
+  });
+  
+  return output;
+}
+
+/**
+ * Format error message consistently
+ */
+export function formatError(message: string, context?: string): string {
+  let output = colors.error(`Error: ${message}`);
+  if (context) {
+    output += `\n${colors.info(`Context: ${context}`)}`;
+  }
+  return output;
+}
+
+/**
+ * Format success message consistently
+ */
+export function formatSuccess(message: string, details?: string): string {
+  let output = colors.success(message);
+  if (details) {
+    output += `\n${colors.info(details)}`;
+  }
+  return output;
+}
+
+/**
+ * Format metadata consistently
+ */
+export function formatMetadata(metadata: any): string {
+  let output = '';
+  
+  if (metadata.total !== undefined) {
+    output += `Total: ${metadata.total}`;
+    if (metadata.showing !== undefined && metadata.showing !== metadata.total) {
+      output += ` (showing ${metadata.showing})`;
+    }
+    output += '\n';
+  }
+  
+  if (metadata.offset !== undefined && metadata.offset > 0) {
+    output += `Results ${metadata.offset + 1}-${metadata.offset + (metadata.showing || metadata.total)}\n`;
+  }
+  
+  return output;
+}
+
+/**
+ * Format token usage consistently
+ */
+export function formatTokenUsage(usage: { total: number; input: number; output: number }): string {
+  return `\nToken usage: ${usage.total} tokens (${usage.input} input, ${usage.output} output)`;
+}
+
+/**
+ * Get priority formatter
+ */
+export function getPriorityFormatter(): (priority: string) => string {
+  return (priority: string) => {
+    switch (priority?.toLowerCase()) {
+      case 'critical': return colors.critical(priority);
+      case 'high': return colors.high(priority);
+      case 'medium': return colors.medium(priority);
+      case 'low': return colors.low(priority);
+      default: return priority || '';
+    }
+  };
+}
+
+/**
+ * Get status formatter with emojis
+ */
+export function getStatusFormatter(): (status: string) => string {
+  return (status: string) => {
+    const statusLower = status?.toLowerCase() || '';
+    let emoji = '';
+    
+    if (statusLower.includes('open') || statusLower === 'proposed') emoji = '🔴';
+    else if (statusLower.includes('progress') || statusLower.includes('development')) emoji = '🔄';
+    else if (statusLower.includes('fixed') || statusLower.includes('completed') || statusLower === 'done') emoji = '✅';
+    else if (statusLower.includes('closed') || statusLower === 'rejected') emoji = '⚫';
+    else if (statusLower.includes('blocked')) emoji = '🚫';
+    else if (statusLower.includes('discussion') || statusLower.includes('research')) emoji = '💬';
+    else if (statusLower.includes('approved')) emoji = '👍';
+    
+    return emoji ? `${emoji} ${status}` : status;
+  };
+}
+
 
 interface Bug {
     id: string;
@@ -80,66 +247,42 @@ interface Bug {
   }
   
   export function formatBugs(bugs: Bug[]): string {
-    if (bugs.length === 0) {
-      return "No bugs found.";
-    }
-  
-    // Calculate column widths
-    const longestId = Math.max(...bugs.map(b => b.id.length));
-    const longestStatus = Math.max(...bugs.map(b => b.status.length));
-    const longestPriority = Math.max(...bugs.map(b => b.priority.length));
-    const longestComponent = Math.max(...bugs.map(b => b.component.length));
-    const longestTitle = Math.max(...bugs.map(b => b.title.length));
+    const columns: TableColumn[] = [
+      { key: 'id', header: 'ID', width: 8 },
+      { key: 'status', header: 'Status', formatter: getStatusFormatter() },
+      { key: 'priority', header: 'Priority', formatter: getPriorityFormatter() },
+      { key: 'component', header: 'Component' },
+      { key: 'dateReported', header: 'Date', width: 10 },
+      { key: 'title', header: 'Title' }
+    ];
     
-    let output = '';
-    
-    bugs.forEach(bug => {
-      output += `${bug.id.padEnd(longestId)}  |  ${bug.status.padEnd(longestStatus)}  |  ${bug.priority.padEnd(longestPriority)}  |  ${bug.component.padEnd(longestComponent)}  |  ${bug.dateReported}  |  ${bug.title}\n`;
-    });
-    
-    return output;
+    return formatTable(bugs, columns);
   }
   
   export function formatFeatureRequests(features: FeatureRequest[]): string {
-    if (features.length === 0) {
-      return "No feature requests found.";
-    }
-  
-    // Calculate column widths
-    const longestId = Math.max(...features.map(f => f.id.length));
-    const longestStatus = Math.max(...features.map(f => f.status.length));
-    const longestPriority = Math.max(...features.map(f => f.priority.length));
-    const longestCategory = Math.max(...features.map(f => f.category.length));
-    const longestTitle = Math.max(...features.map(f => f.title.length));
+    const columns: TableColumn[] = [
+      { key: 'id', header: 'ID', width: 8 },
+      { key: 'status', header: 'Status', formatter: getStatusFormatter() },
+      { key: 'priority', header: 'Priority', formatter: getPriorityFormatter() },
+      { key: 'category', header: 'Category' },
+      { key: 'dateRequested', header: 'Date', width: 10 },
+      { key: 'title', header: 'Title' }
+    ];
     
-    let output = '';
-    
-    features.forEach(feature => {
-      output += `${feature.id.padEnd(longestId)}  |  ${feature.status.padEnd(longestStatus)}  |  ${feature.priority.padEnd(longestPriority)}  |  ${feature.category.padEnd(longestCategory)}  |  ${feature.dateRequested}  |  ${feature.title}\n`;
-    });
-    
-    return output;
+    return formatTable(features, columns);
   }
   
   export function formatImprovements(improvements: Improvement[]): string {
-    if (improvements.length === 0) {
-      return "No improvements found.";
-    }
-  
-    // Calculate column widths
-    const longestId = Math.max(...improvements.map(i => i.id.length));
-    const longestStatus = Math.max(...improvements.map(i => i.status.length));
-    const longestPriority = Math.max(...improvements.map(i => i.priority.length));
-    const longestCategory = Math.max(...improvements.map(i => i.category.length));
-    const longestTitle = Math.max(...improvements.map(i => i.title.length));
+    const columns: TableColumn[] = [
+      { key: 'id', header: 'ID', width: 8 },
+      { key: 'status', header: 'Status', formatter: getStatusFormatter() },
+      { key: 'priority', header: 'Priority', formatter: getPriorityFormatter() },
+      { key: 'category', header: 'Category' },
+      { key: 'dateRequested', header: 'Date', width: 10 },
+      { key: 'title', header: 'Title' }
+    ];
     
-    let output = '';
-    
-    improvements.forEach(improvement => {
-      output += `${improvement.id.padEnd(longestId)}  |  ${improvement.status.padEnd(longestStatus)}  |  ${improvement.priority.padEnd(longestPriority)}  |  ${improvement.category.padEnd(longestCategory)}  |  ${improvement.dateRequested}  |  ${improvement.title}\n`;
-    });
-    
-    return output;
+    return formatTable(improvements, columns);
   }
   
   export function formatImprovementsWithContext(improvements: any[]): string {

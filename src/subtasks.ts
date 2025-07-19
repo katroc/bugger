@@ -1,5 +1,6 @@
 // Subtasks management operations
 import { TokenUsageTracker } from './token-usage-tracker.js';
+import { formatTokenUsage, getStatusFormatter } from './format.js';
 import sqlite3 from 'sqlite3';
 
 export interface Subtask {
@@ -136,7 +137,7 @@ export class SubtaskManager {
       const outputText = `Subtask ${subtaskId} created successfully.`;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_subtask');
 
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to create subtask: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -193,7 +194,7 @@ export class SubtaskManager {
       const outputText = formattedOutput;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'list_subtasks');
 
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to list subtasks: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -249,7 +250,7 @@ export class SubtaskManager {
       const outputText = `Subtask ${subtaskId} status updated to ${status}.`;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'update_subtask_status');
 
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to update subtask status: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -304,7 +305,7 @@ export class SubtaskManager {
       const outputText = formattedOutput;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'get_subtask_progress');
 
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to get subtask progress: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -364,7 +365,7 @@ export class SubtaskManager {
       const outputText = `Subtasks for ${parentId} reordered successfully.`;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'reorder_subtasks');
 
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       // Rollback on error
       await new Promise<void>((resolve) => {
@@ -405,7 +406,7 @@ export class SubtaskManager {
       const outputText = `Subtask ${subtaskId} deleted successfully.`;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'delete_subtask');
 
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to delete subtask: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -485,7 +486,7 @@ export class SubtaskManager {
   /**
    * Auto-generate subtasks based on parent task and contexts
    */
-  private async autoGenerateSubtasks(db: sqlite3.Database, parentId: string): Promise<Subtask[]> {
+  async autoGenerateSubtasks(db: sqlite3.Database, parentId: string, parentType?: string, taskData?: any): Promise<Subtask[]> {
     try {
       // Get parent task details
       const parentTask = await this.getParentTaskDetails(db, parentId);
@@ -927,7 +928,7 @@ export class SubtaskManager {
       const outputText = formattedOutput;
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'generate_subtasks_from_todos');
       
-      return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+      return `${outputText}${formatTokenUsage(tokenUsage)}`;
     } catch (error) {
       throw new Error(`Failed to generate subtasks from todos: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -1242,11 +1243,12 @@ export class SubtaskManager {
     let output = `Subtasks for ${parentId}:\n\n`;
     
     subtasks.forEach((subtask, index) => {
-      const emoji = this.getStatusEmoji(subtask.status);
+      const statusFormatter = getStatusFormatter();
+      const formattedStatus = statusFormatter(subtask.status);
       const priority = subtask.priority?.toUpperCase() || 'MEDIUM';
       const hours = subtask.estimatedHours ? `${subtask.estimatedHours}h` : 'TBD';
       
-      output += `${index + 1}. ${emoji} ${subtask.title} [${subtask.id}]\n`;
+      output += `${index + 1}. ${formattedStatus} ${subtask.title} [${subtask.id}]\n`;
       output += `   Status: ${subtask.status.toUpperCase()}\n`;
       output += `   Priority: ${priority}\n`;
       output += `   Estimated: ${hours}\n`;
@@ -1261,16 +1263,4 @@ export class SubtaskManager {
     return output;
   }
 
-  /**
-   * Get emoji for subtask status
-   */
-  private getStatusEmoji(status: string): string {
-    switch (status) {
-      case 'todo': return '📋';
-      case 'in_progress': return '🔄';
-      case 'done': return '✅';
-      case 'blocked': return '🚫';
-      default: return '❓';
-    }
-  }
 }

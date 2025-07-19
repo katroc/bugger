@@ -1,6 +1,8 @@
 // Feature request management operations
-import { formatFeatureRequests, formatBulkUpdateResults } from './format.js';
+import { formatFeatureRequests, formatBulkUpdateResults, formatTokenUsage } from './format.js';
 import { TokenUsageTracker } from './token-usage-tracker.js';
+import { SubtaskManager } from './subtasks.js';
+import { TodoManager } from './todos.js';
 import sqlite3 from 'sqlite3';
 
 // Feature request interface
@@ -78,16 +80,53 @@ export class FeatureManager {
         feature.potentialImplementation,
         JSON.stringify(feature.dependencies),
         feature.effortEstimate
-      ], (err) => {
+      ], async (err) => {
         if (err) {
           reject(new Error(`Failed to create feature request: ${err.message}`));
         } else {
-          // Record token usage
-          const inputText = JSON.stringify(args);
-          const outputText = `Created feature request ${feature.id}`;
-          const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_feature_request');
-          
-          resolve(`Feature request ${feature.id} created successfully.\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`);
+          try {
+            // Auto-generate subtasks and todos immediately after feature creation
+            const subtaskManager = new SubtaskManager();
+            const todoManager = new TodoManager();
+            
+            // Generate subtasks for the new feature
+            await subtaskManager.autoGenerateSubtasks(db, feature.id, 'feature', {
+              title: feature.title,
+              description: feature.description,
+              userStory: feature.userStory,
+              currentBehavior: feature.currentBehavior,
+              expectedBehavior: feature.expectedBehavior,
+              acceptanceCriteria: feature.acceptanceCriteria,
+              potentialImplementation: feature.potentialImplementation
+            });
+            
+            // Get the generated subtasks to create todos for each
+            const subtasks = await this.getSubtasksForFeature(db, feature.id);
+            
+            // Generate todos for each subtask
+            for (const subtask of subtasks) {
+              await todoManager.autoGenerateTodos(db, subtask.id, feature.id, 'feature', {
+                title: subtask.title,
+                description: subtask.description
+              });
+            }
+            
+            // Record token usage
+            const inputText = JSON.stringify(args);
+            const outputText = `Created feature request ${feature.id} with ${subtasks.length} subtasks and associated todos`;
+            const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_feature_request');
+            
+            resolve(`Feature request ${feature.id} created successfully with ${subtasks.length} subtasks and associated todos.${formatTokenUsage(tokenUsage)}`);
+          } catch (autoGenError) {
+            // If auto-generation fails, still return success for the feature creation
+            console.warn(`Auto-generation failed for feature ${feature.id}:`, autoGenError);
+            
+            const inputText = JSON.stringify(args);
+            const outputText = `Created feature request ${feature.id} (auto-generation failed)`;
+            const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_feature_request');
+            
+            resolve(`Feature request ${feature.id} created successfully (note: auto-generation of subtasks/todos failed).${formatTokenUsage(tokenUsage)}`);
+          }
         }
       });
     });
@@ -322,6 +361,22 @@ export class FeatureManager {
     const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'bulk_update_feature_status');
     
     return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
+  }
+
+  /**
+   * Get subtasks for a feature (helper for auto-generation)
+   */
+  private async getSubtasksForFeature(db: sqlite3.Database, featureId: string): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      const query = 'SELECT * FROM subtasks WHERE parentId = ? ORDER BY orderIndex';
+      db.all(query, [featureId], (err, rows) => {
+        if (err) {
+          reject(new Error(`Failed to get subtasks: ${err.message}`));
+        } else {
+          resolve(rows || []);
+        }
+      });
+    });
   }
 
   /**

@@ -1,6 +1,8 @@
 // Improvement management operations
-import { formatImprovements, formatImprovementsWithContext, formatBulkUpdateResults } from './format.js';
+import { formatImprovements, formatImprovementsWithContext, formatBulkUpdateResults, formatTokenUsage } from './format.js';
 import { TokenUsageTracker } from './token-usage-tracker.js';
+import { SubtaskManager } from './subtasks.js';
+import { TodoManager } from './todos.js';
 import sqlite3 from 'sqlite3';
 import * as fs from 'fs';
 
@@ -86,16 +88,53 @@ export class ImprovementManager {
         JSON.stringify(improvement.dependencies),
         improvement.effortEstimate,
         JSON.stringify(improvement.benefits)
-      ], (err) => {
+      ], async (err) => {
         if (err) {
           reject(new Error(`Failed to create improvement: ${err.message}`));
         } else {
-          // Record token usage
-          const inputText = JSON.stringify(args);
-          const outputText = `Created improvement ${improvement.id}`;
-          const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_improvement');
-          
-          resolve(`Improvement ${improvement.id} created successfully.\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`);
+          try {
+            // Auto-generate subtasks and todos immediately after improvement creation
+            const subtaskManager = new SubtaskManager();
+            const todoManager = new TodoManager();
+            
+            // Generate subtasks for the new improvement
+            await subtaskManager.autoGenerateSubtasks(db, improvement.id, 'improvement', {
+              title: improvement.title,
+              description: improvement.description,
+              currentState: improvement.currentState,
+              desiredState: improvement.desiredState,
+              acceptanceCriteria: improvement.acceptanceCriteria,
+              filesLikelyInvolved: improvement.filesLikelyInvolved,
+              implementationDetails: improvement.implementationDetails
+            });
+            
+            // Get the generated subtasks to create todos for each
+            const subtasks = await this.getSubtasksForImprovement(db, improvement.id);
+            
+            // Generate todos for each subtask
+            for (const subtask of subtasks) {
+              await todoManager.autoGenerateTodos(db, subtask.id, improvement.id, 'improvement', {
+                title: subtask.title,
+                description: subtask.description
+              });
+            }
+            
+            // Record token usage
+            const inputText = JSON.stringify(args);
+            const outputText = `Created improvement ${improvement.id} with ${subtasks.length} subtasks and associated todos`;
+            const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_improvement');
+            
+            resolve(`Improvement ${improvement.id} created successfully with ${subtasks.length} subtasks and associated todos.${formatTokenUsage(tokenUsage)}`);
+          } catch (autoGenError) {
+            // If auto-generation fails, still return success for the improvement creation
+            console.warn(`Auto-generation failed for improvement ${improvement.id}:`, autoGenError);
+            
+            const inputText = JSON.stringify(args);
+            const outputText = `Created improvement ${improvement.id} (auto-generation failed)`;
+            const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_improvement');
+            
+            resolve(`Improvement ${improvement.id} created successfully (note: auto-generation of subtasks/todos failed).${formatTokenUsage(tokenUsage)}`);
+          }
         }
       });
     });
@@ -453,6 +492,22 @@ export class ImprovementManager {
     const stopWords = ['the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'this', 'that', 'which', 'who', 'what', 'where', 'when', 'why', 'how', 'can', 'could', 'should', 'would', 'will', 'have', 'has', 'had', 'do', 'does', 'did', 'is', 'are', 'was', 'were', 'be', 'been', 'being'];
     
     return words.filter(word => !stopWords.includes(word)).slice(0, 20);
+  }
+
+  /**
+   * Get subtasks for an improvement (helper for auto-generation)
+   */
+  private async getSubtasksForImprovement(db: sqlite3.Database, improvementId: string): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      const query = 'SELECT * FROM subtasks WHERE parentId = ? ORDER BY orderIndex';
+      db.all(query, [improvementId], (err, rows) => {
+        if (err) {
+          reject(new Error(`Failed to get subtasks: ${err.message}`));
+        } else {
+          resolve(rows || []);
+        }
+      });
+    });
   }
 
   /**
