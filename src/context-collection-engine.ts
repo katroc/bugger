@@ -1,6 +1,7 @@
 // Context collection engine that orchestrates pattern matching and dependency analysis
 import { TreeSitterCodeAnalyzer, FunctionMatch, ClassMatch, PatternMatch } from './treesitter-code-analyzer.js';
 import { DependencyAnalyzer, DependencyGraph, FileRelationship } from './dependency-analysis.js';
+import { StackTraceParser, ParsedStackTrace, StackTraceContext } from './stack-trace-parser.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -67,6 +68,7 @@ export interface ContextCollectionConfig {
 
 export interface ContextCollectionResult {
   contexts: CodeContext[];
+  stackTraces?: ParsedStackTrace[];
   summary: {
     totalContexts: number;
     highRelevanceContexts: number;
@@ -77,6 +79,7 @@ export interface ContextCollectionResult {
     filesAnalyzed: number;
     patternsFound: number;
     dependenciesAnalyzed: number;
+    stackTracesFound: number;
   };
   recommendations: string[];
   potentialIssues: string[];
@@ -124,44 +127,54 @@ export class ContextCollectionEngine {
       // Step 1: Analyze task description using text analysis
       const textAnalysis = await this.analyzeTaskText(input);
       
-      // Step 2: Find relevant code patterns
+      // Step 2: Parse stack traces (especially useful for bug reports)
+      const stackTraces = input.taskType === 'bug' ? 
+        await this.parseStackTraces(textAnalysis.combinedText) : [];
+      
+      // Step 3: Find relevant code patterns
       const patternMatches = this.config.enablePatternMatching ? 
         await this.findRelevantPatterns(textAnalysis) : [];
       
-      // Step 3: Analyze dependencies
+      // Step 4: Analyze dependencies
       const dependencyInfo = this.config.enableDependencyAnalysis ? 
         await this.analyzeDependencies(input.filesLikelyInvolved || []) : null;
       
-      // Step 4: Extract code sections
-      const codeSections = await this.extractCodeSections(input, textAnalysis, patternMatches, dependencyInfo);
+      // Step 5: Extract code sections (including stack trace contexts)
+      const codeSections = await this.extractCodeSections(input, textAnalysis, patternMatches, dependencyInfo, stackTraces);
       
-      // Step 5: Score and rank contexts
+      // Step 6: Score and rank contexts
       const scoredContexts = await this.scoreAndRankContexts(codeSections, textAnalysis, input);
       
-      // Step 6: Filter and limit contexts
+      // Step 7: Filter and limit contexts
       const filteredContexts = this.filterContexts(scoredContexts);
       
-      // Step 7: Convert to CodeContext objects
+      // Step 8: Convert to CodeContext objects
       let contexts = await this.convertToCodeContexts(filteredContexts, input);
       
-      // Step 8: Apply token optimizations
+      // Step 9: Apply token optimizations
       contexts = this.deduplicateContexts(contexts);
       contexts = this.applyTokenFiltering(contexts, input.taskType);
       
-      // Step 9: Generate summary and recommendations
-      const summary = this.generateSummary(contexts, startTime, patternMatches, dependencyInfo);
-      const recommendations = this.generateRecommendations(contexts, textAnalysis, patternMatches);
+      // Step 10: Generate summary and recommendations
+      const summary = this.generateSummary(contexts, startTime, patternMatches, dependencyInfo, stackTraces);
+      const recommendations = this.generateRecommendations(contexts, textAnalysis, patternMatches, stackTraces);
       const potentialIssues = this.identifyPotentialIssues(contexts, dependencyInfo);
       
-      // Step 10: Cache results
+      // Step 11: Cache results
       this.cacheResults(input.taskId, contexts);
       
-      return {
+      const result: ContextCollectionResult = {
         contexts,
         summary,
         recommendations,
         potentialIssues
       };
+
+      if (stackTraces.length > 0) {
+        result.stackTraces = stackTraces;
+      }
+
+      return result;
       
     } catch (error) {
       console.error('Error in context collection:', error);
@@ -207,6 +220,80 @@ export class ContextCollectionEngine {
   }
 
   // Private methods
+
+  /**
+   * Parse stack traces from task description text
+   */
+  private async parseStackTraces(combinedText: string): Promise<ParsedStackTrace[]> {
+    try {
+      if (!StackTraceParser.containsStackTrace(combinedText)) {
+        return [];
+      }
+
+      const stackTraces = StackTraceParser.extractStackTraces(combinedText);
+      
+      // Filter for valid, high-confidence stack traces
+      return stackTraces.filter(trace => trace.isValid && trace.confidence > 0.5);
+    } catch (error) {
+      console.error('Error parsing stack traces:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Extract stack trace contexts for code collection
+   */
+  private async extractStackTraceContexts(stackTraces: ParsedStackTrace[]): Promise<CodeSection[]> {
+    const sections: CodeSection[] = [];
+
+    for (const stackTrace of stackTraces) {
+      const contexts = StackTraceParser.extractStackTraceContexts(stackTrace);
+      
+      for (const context of contexts) {
+        // Check if file exists and is readable
+        if (fs.existsSync(context.filePath)) {
+          try {
+            const content = await this.readFileSection(
+              context.filePath,
+              Math.max(1, context.lineNumber - context.contextLines),
+              context.lineNumber + context.contextLines
+            );
+
+            if (content) {
+              const relevanceScore = this.calculateStackTraceRelevance(context.priority, stackTrace.confidence);
+              
+              sections.push({
+                filePath: context.filePath,
+                startLine: Math.max(1, context.lineNumber - context.contextLines),
+                endLine: context.lineNumber + context.contextLines,
+                content,
+                relevanceScore,
+                contextType: 'function',
+                relatedEntities: context.functionName ? [context.functionName] : []
+              });
+            }
+          } catch (error) {
+            console.error(`Error reading stack trace context from ${context.filePath}:`, error);
+          }
+        }
+      }
+    }
+
+    return sections;
+  }
+
+  /**
+   * Calculate relevance score for stack trace contexts
+   */
+  private calculateStackTraceRelevance(priority: 'high' | 'medium' | 'low', confidence: number): number {
+    const priorityScores = {
+      high: 0.9,
+      medium: 0.7,
+      low: 0.5
+    };
+
+    return Math.min(1.0, priorityScores[priority] * confidence);
+  }
 
   /**
    * Estimate token count for text content
@@ -472,9 +559,16 @@ export class ContextCollectionEngine {
     input: TaskAnalysisInput,
     textAnalysis: any,
     patternMatches: any,
-    dependencyInfo: any
+    dependencyInfo: any,
+    stackTraces: ParsedStackTrace[]
   ): Promise<CodeSection[]> {
     const sections: CodeSection[] = [];
+    
+    // Extract sections from stack traces (highest priority for bugs)
+    if (stackTraces.length > 0) {
+      const stackTraceSections = await this.extractStackTraceContexts(stackTraces);
+      sections.push(...stackTraceSections);
+    }
     
     // Extract sections from pattern matches
     for (const funcMatch of patternMatches.functions || []) {
@@ -809,7 +903,8 @@ export class ContextCollectionEngine {
     contexts: CodeContext[],
     startTime: number,
     patternMatches: any,
-    dependencyInfo: any
+    dependencyInfo: any,
+    stackTraces: ParsedStackTrace[]
   ): ContextCollectionResult['summary'] {
     const highRelevanceContexts = contexts.filter(c => c.relevanceScore > 0.7).length;
     const mediumRelevanceContexts = contexts.filter(c => c.relevanceScore > 0.4 && c.relevanceScore <= 0.7).length;
@@ -824,6 +919,7 @@ export class ContextCollectionEngine {
                          (patternMatches.classes?.length || 0) + 
                          (patternMatches.patterns?.length || 0);
     const dependenciesAnalyzed = dependencyInfo ? dependencyInfo.graph.edges.length : 0;
+    const stackTracesFound = stackTraces.length;
     
     return {
       totalContexts: contexts.length,
@@ -834,16 +930,36 @@ export class ContextCollectionEngine {
       processingTimeMs,
       filesAnalyzed,
       patternsFound,
-      dependenciesAnalyzed
+      dependenciesAnalyzed,
+      stackTracesFound
     };
   }
 
   private generateRecommendations(
     contexts: CodeContext[],
     textAnalysis: any,
-    patternMatches: any
+    patternMatches: any,
+    stackTraces: ParsedStackTrace[]
   ): string[] {
     const recommendations: string[] = [];
+    
+    // Stack trace specific recommendations
+    if (stackTraces.length > 0) {
+      const highConfidenceTraces = stackTraces.filter(trace => trace.confidence > 0.8);
+      if (highConfidenceTraces.length > 0) {
+        recommendations.push(`Found ${highConfidenceTraces.length} high-confidence stack trace(s) - code contexts automatically collected from error locations`);
+      }
+      
+      const languages = [...new Set(stackTraces.map(trace => trace.language))];
+      if (languages.length > 1) {
+        recommendations.push(`Multiple programming languages detected in stack traces: ${languages.join(', ')}`);
+      }
+      
+      const errorTypes = [...new Set(stackTraces.map(trace => trace.errorType).filter(Boolean))];
+      if (errorTypes.length > 0) {
+        recommendations.push(`Error types identified: ${errorTypes.join(', ')} - consider adding error handling for these cases`);
+      }
+    }
     
     // Check if we have enough high-quality contexts
     const highQualityContexts = contexts.filter(c => c.relevanceScore > 0.7);

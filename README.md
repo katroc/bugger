@@ -4,7 +4,7 @@ A comprehensive Model Context Protocol (MCP) server that transforms how you mana
 
 Built for developers who want to stay in their flow state, bugger-mcp integrates directly with Claude, Cursor, Windsurf, and other MCP-compatible tools. No more context switching between your IDE and external tracking tools - manage your entire project lifecycle through simple conversations.
 
-**Version 0.4.8** - Now with streamlined architecture focused on core project management.
+**Version 0.4.12** - Now with streamlined architecture focused on core project management.
 
 **Key Features:**
 - 🐛 **Bug Tracking** - Create detailed bug reports with reproduction steps, priorities, and component tracking
