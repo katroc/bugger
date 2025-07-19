@@ -77,9 +77,8 @@ Once installed, you'll have access to these MCP tools:
 - **get_statistics**: Generate project statistics for bugs, features, improvements, or all items. Use to get insights into project health and progress.
 - **get_related_items**: Find items related to a specific bug, feature, or improvement. Use to understand dependencies and relationships.
 
-### Relationships & Sync
+### Relationships
 - **link_items**: Create relationships between items (blocks, relates_to, duplicate_of). Use to track dependencies and connections between different issues.
-- **sync_from_markdown**: Import existing data from markdown files. Use when migrating from other tracking systems or initializing the database.
 
 ### Advanced Features
 - **execute_workflow**: Execute predefined workflows for common multi-step operations like creating and linking multiple items, batch context collection, or status transitions. Use to automate complex project management tasks.

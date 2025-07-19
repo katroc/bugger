@@ -254,9 +254,6 @@ class ProjectManagementServer {
     return results.join('\n\n');
   }
 
-  private async syncFromMarkdown(_args: any) {
-    return 'Sync from markdown functionality not yet implemented in modular architecture.';
-  }
 
 
   private setupToolHandlers() {
@@ -423,17 +420,6 @@ class ProjectManagementServer {
                   enum: ['bugs', 'features', 'improvements', 'all'],
                   description: 'Type of statistics to generate'
                 }
-              },
-              additionalProperties: false
-            }
-          },
-          {
-            name: 'sync_from_markdown',
-            description: 'Synchronize data from existing markdown files',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                force: { type: 'boolean', description: 'Force sync even if data exists' }
               },
               additionalProperties: false
             }
@@ -653,9 +639,6 @@ class ProjectManagementServer {
             result = await this.searchManager.getStatistics(this.db, args);
             break;
 
-          case 'sync_from_markdown':
-            result = await this.syncFromMarkdown(args);
-            break;
 
           case 'link_items':
             result = await this.withTransaction(() => this.workflowManager.linkItems(this.db, args));
