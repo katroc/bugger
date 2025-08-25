@@ -185,18 +185,16 @@ export class FeatureManager {
 
     return new Promise((resolve, reject) => {
       const updateQuery = 'UPDATE feature_requests SET status = ? WHERE id = ?';
-      
-      db.run(updateQuery, [status, itemId], (err: any, result: any) => {
+      db.run(updateQuery, [status, itemId], function (this: any, err: any) {
         if (err) {
           reject(new Error(`Failed to update feature request status: ${err.message}`));
-        } else if (result && (result as any).changes === 0) {
+        } else if (this && this.changes === 0) {
           reject(new Error(`Feature request ${itemId} not found`));
         } else {
           // Record token usage
           const inputText = JSON.stringify(args);
           const outputText = `Updated feature request ${itemId} to ${status}`;
-          const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'update_feature_status');
-          
+          const tokenUsage = TokenUsageTracker.getInstance().recordUsage(inputText, outputText, 'update_feature_status');
           resolve(`Feature request ${itemId} updated to ${status}.\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`);
         }
       });
@@ -277,10 +275,19 @@ export class FeatureManager {
       sql += conditions.join(' AND ');
     }
 
-    // Add sorting
-    const sortBy = args.sortBy || 'dateRequested';
-    const sortOrder = args.sortOrder || 'desc';
-    sql += ` ORDER BY ${sortBy} ${sortOrder}`;
+    // Add sorting with whitelist mapping
+    const sortKey = args.sortBy || 'date';
+    const sortMap: Record<string, string> = {
+      date: 'dateRequested',
+      priority: 'priority',
+      title: 'title',
+      status: 'status',
+      category: 'category',
+      requestedBy: 'requestedBy',
+    };
+    const orderByColumn = sortMap[sortKey] || 'dateRequested';
+    const sortOrder = (String(args.sortOrder).toLowerCase() === 'asc') ? 'ASC' : 'DESC';
+    sql += ` ORDER BY ${orderByColumn} ${sortOrder}`;
 
     // Add pagination
     sql += ' LIMIT ? OFFSET ?';

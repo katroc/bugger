@@ -210,17 +210,16 @@ export class BugManager {
       updateQuery += ' WHERE id = ?';
       params.push(itemId);
 
-      db.run(updateQuery, params, (err: any, result: any) => {
+      db.run(updateQuery, params, function (this: any, err: any) {
         if (err) {
           reject(new Error(`Failed to update bug status: ${err.message}`));
-        } else if (result && (result as any).changes === 0) {
+        } else if (this && this.changes === 0) {
           reject(new Error(`Bug ${itemId} not found`));
         } else {
           // Record token usage
           const inputText = JSON.stringify(args);
           const outputText = `Updated bug ${itemId} to ${status}`;
-          const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'update_bug_status');
-          
+          const tokenUsage = TokenUsageTracker.getInstance().recordUsage(inputText, outputText, 'update_bug_status');
           resolve(`Bug ${itemId} updated to ${status}.\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`);
         }
       });
@@ -296,10 +295,18 @@ export class BugManager {
       sql += conditions.join(' AND ');
     }
 
-    // Add sorting
-    const sortBy = args.sortBy || 'dateReported';
-    const sortOrder = args.sortOrder || 'desc';
-    sql += ` ORDER BY ${sortBy} ${sortOrder}`;
+    // Add sorting with whitelist mapping to avoid SQL injection via identifiers
+    const sortKey = args.sortBy || 'date';
+    const sortMap: Record<string, string> = {
+      date: 'dateReported',
+      priority: 'priority',
+      title: 'title',
+      status: 'status',
+      component: 'component',
+    };
+    const orderByColumn = sortMap[sortKey] || 'dateReported';
+    const sortOrder = (String(args.sortOrder).toLowerCase() === 'asc') ? 'ASC' : 'DESC';
+    sql += ` ORDER BY ${orderByColumn} ${sortOrder}`;
 
     // Add pagination
     sql += ' LIMIT ? OFFSET ?';

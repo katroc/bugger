@@ -129,6 +129,15 @@ After installation, you can use natural language with your AI assistant to manag
 - "Discover features similar to 'dark mode implementation' through semantic matching"
 - "Find improvements semantically related to 'performance optimization'"
 
+#### Search Indexing Notes
+- The server automatically refreshes its full-text index shortly after item mutations (create/update/bulk/workflow), so agents can run `search_semantic` without manual steps.
+- For large imports or after enabling FTS5 on your SQLite build, run the `rebuild_search_index` tool once to initialize/refill the index.
+- If FTS5 is unavailable, the server falls back to approximate similarity (Jaccard) so results still work, just less precise.
+
+#### File Context Safety
+- The server reads file contexts only within `CONTEXT_ROOT` (default: the current working directory). Paths outside this root are denied for safety when agents provide file lists.
+- Very large files (>1MB) are skipped to keep responses fast and resource usage low for agents.
+
 ## Context Management
 
 bugger-mcp includes advanced context management capabilities that help you maintain relevant code snippets, file references, and dependencies for each item. This feature automatically tracks:
@@ -195,3 +204,7 @@ npm run dev
 ## License
 
 [MIT](LICENSE)
+## Configuration
+- `DB_PATH`: Path to the SQLite database file (default: `bugger.db`).
+- `CONTEXT_ROOT`: Absolute path restricting file context reads to a safe subtree (default: current working directory). Paths outside this root are denied.
+- `LOG_LEVEL`: `debug`, `info`, `warn`, or `error` (default: `info`). Controls server logging verbosity for easier agent/operator troubleshooting.

@@ -5,18 +5,74 @@ import { BugManager } from './bugs.js';
 import { FeatureManager } from './features.js';
 import { ImprovementManager } from './improvements.js';
 import sqlite3 from 'sqlite3';
+import { log } from './logger.js';
 
 export class SearchManager {
   private tokenTracker: TokenUsageTracker;
   private bugManager: BugManager;
   private featureManager: FeatureManager;
   private improvementManager: ImprovementManager;
+  private ftsReady?: boolean;
 
   constructor() {
     this.tokenTracker = TokenUsageTracker.getInstance();
     this.bugManager = new BugManager();
     this.featureManager = new FeatureManager();
     this.improvementManager = new ImprovementManager();
+  }
+
+  /**
+   * Ensure FTS5 virtual table exists (best-effort). If unavailable, sets ftsReady=false.
+   */
+  private async ensureFts(db: sqlite3.Database): Promise<boolean> {
+    if (this.ftsReady !== undefined) return this.ftsReady;
+    const create = `CREATE VIRTUAL TABLE IF NOT EXISTS item_fts USING fts5(
+      id UNINDEXED, type UNINDEXED, title, description
+    )`;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        db.run(create, (err) => (err ? reject(err) : resolve()));
+      });
+      this.ftsReady = true;
+    } catch {
+      this.ftsReady = false;
+    }
+    return this.ftsReady;
+  }
+
+  /**
+   * Rebuild the FTS index from current DB content.
+   */
+  public async rebuildIndex(db: sqlite3.Database): Promise<string> {
+    this.tokenTracker.startOperation('rebuild_search_index');
+    const ok = await this.ensureFts(db);
+    if (!ok) {
+      throw new Error('FTS5 is not available in this SQLite build');
+    }
+    log.info('Rebuilding search index (FTS5)');
+    // Clear
+    await new Promise<void>((resolve, reject) => db.run('DELETE FROM item_fts', (e)=> e?reject(e):resolve()));
+    // Insert bugs
+    await new Promise<void>((resolve, reject) => db.run(
+      `INSERT INTO item_fts (id, type, title, description)
+       SELECT id, 'bug', title, description FROM bugs`,
+      (e)=> e?reject(e):resolve()
+    ));
+    // Insert features
+    await new Promise<void>((resolve, reject) => db.run(
+      `INSERT INTO item_fts (id, type, title, description)
+       SELECT id, 'feature', title, description FROM feature_requests`,
+      (e)=> e?reject(e):resolve()
+    ));
+    // Insert improvements
+    await new Promise<void>((resolve, reject) => db.run(
+      `INSERT INTO item_fts (id, type, title, description)
+       SELECT id, 'improvement', title, description FROM improvements`,
+      (e)=> e?reject(e):resolve()
+    ));
+    const msg = 'Search index rebuilt';
+    const usage = this.tokenTracker.recordUsage('', msg, 'rebuild_search_index');
+    return `${msg}\n\nToken usage: ${usage.total} tokens (${usage.input} input, ${usage.output} output)`;
   }
 
   /**
@@ -30,57 +86,55 @@ export class SearchManager {
     if (!query) {
       throw new Error('Query is required for semantic search');
     }
-
     const results: any[] = [];
 
     try {
-      // Search bugs
-      const bugs = await this.searchAllBugs(db, query);
-      for (const bug of bugs) {
-        const similarity = this.calculateSimilarity(query, `${bug.title} ${bug.description}`);
-        if (similarity >= minSimilarity) {
-          results.push({
-            ...bug,
-            type: 'bug',
-            similarity,
-            matchedFields: this.getMatchedFields(query, bug, ['title', 'description', 'component'])
-          });
+      // Try FTS5 first
+      if (await this.ensureFts(db)) {
+        const rows: any[] = await new Promise((resolve, reject) => {
+          db.all(
+            `SELECT id, type, bm25(item_fts) as rank FROM item_fts WHERE item_fts MATCH ? ORDER BY rank LIMIT ?`,
+            [query, limit],
+            (err, rows) => (err ? reject(err) : resolve(rows || []))
+          );
+        });
+
+        for (const row of rows) {
+          const item = await this.fetchItemById(db, row.type, row.id);
+          if (item) {
+            results.push({ ...item, type: row.type, similarity: 1 / (1 + row.rank) });
+          }
         }
       }
 
-      // Search features
-      const features = await this.searchAllFeatures(db, query);
-      for (const feature of features) {
-        const similarity = this.calculateSimilarity(query, `${feature.title} ${feature.description}`);
-        if (similarity >= minSimilarity) {
-          results.push({
-            ...feature,
-            type: 'feature',
-            similarity,
-            matchedFields: this.getMatchedFields(query, feature, ['title', 'description', 'category'])
-          });
+      // Fallback: Jaccard-based approximate similarity
+      if (results.length === 0) {
+        const bugs = await this.searchAllBugs(db, query);
+        for (const bug of bugs) {
+          const similarity = this.calculateSimilarity(query, `${bug.title} ${bug.description}`);
+          if (similarity >= minSimilarity) {
+            results.push({ ...bug, type: 'bug', similarity });
+          }
+        }
+        const features = await this.searchAllFeatures(db, query);
+        for (const feature of features) {
+          const similarity = this.calculateSimilarity(query, `${feature.title} ${feature.description}`);
+          if (similarity >= minSimilarity) {
+            results.push({ ...feature, type: 'feature', similarity });
+          }
+        }
+        const improvements = await this.searchAllImprovements(db, query);
+        for (const improvement of improvements) {
+          const similarity = this.calculateSimilarity(query, `${improvement.title} ${improvement.description}`);
+          if (similarity >= minSimilarity) {
+            results.push({ ...improvement, type: 'improvement', similarity });
+          }
         }
       }
 
-      // Search improvements
-      const improvements = await this.searchAllImprovements(db, query);
-      for (const improvement of improvements) {
-        const similarity = this.calculateSimilarity(query, `${improvement.title} ${improvement.description}`);
-        if (similarity >= minSimilarity) {
-          results.push({
-            ...improvement,
-            type: 'improvement',
-            similarity,
-            matchedFields: this.getMatchedFields(query, improvement, ['title', 'description', 'category'])
-          });
-        }
-      }
-
-      // Sort by similarity and limit results
       results.sort((a, b) => b.similarity - a.similarity);
       const limitedResults = results.slice(0, limit);
 
-      // Record token usage
       const inputText = JSON.stringify(args);
       const outputText = formatSearchResults(limitedResults, {
         total: results.length,
@@ -88,7 +142,6 @@ export class SearchManager {
         offset: 0
       });
       const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'semantic_search');
-      
       return `${outputText}\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`;
     } catch (error) {
       throw new Error(`Semantic search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -122,18 +175,26 @@ export class SearchManager {
 
       // Apply global sorting if type is 'all'
       if (type === 'all') {
-        const sortBy = args.sortBy || 'dateReported';
-        const sortOrder = args.sortOrder || 'desc';
-        
-        results.sort((a, b) => {
-          const aValue = a[sortBy] || a.dateRequested || '';
-          const bValue = b[sortBy] || b.dateRequested || '';
-          
-          if (sortOrder === 'asc') {
-            return aValue.localeCompare(bValue);
-          } else {
-            return bValue.localeCompare(aValue);
+        const sortKey = (args.sortBy || 'date').toLowerCase();
+        const sortOrder = (String(args.sortOrder).toLowerCase() === 'asc') ? 'asc' : 'desc';
+
+        const getSortValue = (item: any): string => {
+          switch (sortKey) {
+            case 'priority':
+            case 'title':
+            case 'status':
+              return String(item[sortKey] || '');
+            case 'date':
+            default:
+              // Prefer item-specific date field
+              return String(item.dateReported || item.dateRequested || '');
           }
+        };
+
+        results.sort((a, b) => {
+          const av = getSortValue(a);
+          const bv = getSortValue(b);
+          return sortOrder === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
         });
 
         // Apply pagination for 'all' type
@@ -224,6 +285,45 @@ export class SearchManager {
     }
 
     return matchedFields;
+  }
+
+  private async fetchItemById(db: sqlite3.Database, type: string, id: string): Promise<any | null> {
+    const queryMap: Record<string, string> = {
+      bug: 'SELECT * FROM bugs WHERE id = ? LIMIT 1',
+      feature: 'SELECT * FROM feature_requests WHERE id = ? LIMIT 1',
+      improvement: 'SELECT * FROM improvements WHERE id = ? LIMIT 1',
+    };
+    const sql = queryMap[type];
+    if (!sql) return null;
+    return new Promise((resolve, reject) => {
+      db.get(sql, [id], (err, row: any) => {
+        if (err) return reject(err);
+        if (!row) return resolve(null);
+        if (type === 'bug') {
+          resolve({
+            ...row,
+            filesLikelyInvolved: JSON.parse(row.filesLikelyInvolved || '[]'),
+            stepsToReproduce: JSON.parse(row.stepsToReproduce || '[]'),
+            verification: JSON.parse(row.verification || '[]'),
+            humanVerified: row.humanVerified === 1
+          });
+        } else if (type === 'feature') {
+          resolve({
+            ...row,
+            acceptanceCriteria: JSON.parse(row.acceptanceCriteria || '[]'),
+            dependencies: JSON.parse(row.dependencies || '[]')
+          });
+        } else {
+          resolve({
+            ...row,
+            acceptanceCriteria: JSON.parse(row.acceptanceCriteria || '[]'),
+            filesLikelyInvolved: JSON.parse(row.filesLikelyInvolved || '[]'),
+            dependencies: JSON.parse(row.dependencies || '[]'),
+            benefits: JSON.parse(row.benefits || '[]')
+          });
+        }
+      });
+    });
   }
 
   /**
