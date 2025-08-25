@@ -83,7 +83,8 @@ Once installed, you'll have access to these MCP tools:
 ### Advanced Features
 - **execute_workflow**: Execute predefined workflows for common multi-step operations like creating and linking multiple items, batch context collection, or status transitions. Use to automate complex project management tasks.
 - **manage_contexts**: Unified context management for tasks - collect, get, check freshness, add, update, or remove code contexts. Use to maintain relevant code snippets, file references, and dependencies for each item.
-- **search_semantic**: Perform semantic search using vector embeddings to find similar items based on meaning rather than keywords. Use to discover related bugs, features, or improvements by context and intent.
+- **search_semantic**: Perform semantic search using FTS-based ranking with a similarity fallback to find related items by meaning, not just keywords.
+- **rebuild_search_index**: Rebuild the FTS index. Usually not required (auto-sync via triggers), but useful after large imports or enabling FTS5.
 
 ## Usage Examples
 
