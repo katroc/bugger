@@ -3,6 +3,7 @@ import { formatImprovements, formatImprovementsWithContext, formatBulkUpdateResu
 import { TokenUsageTracker } from './token-usage-tracker.js';
 import sqlite3 from 'sqlite3';
 import * as fs from 'fs';
+import * as path from 'path';
 
 // Improvement interface
 export interface Improvement {
@@ -204,17 +205,16 @@ export class ImprovementManager {
       updateQuery += ' WHERE id = ?';
       params.push(itemId);
 
-      db.run(updateQuery, params, (err: any, result: any) => {
+      db.run(updateQuery, params, function (this: any, err: any) {
         if (err) {
           reject(new Error(`Failed to update improvement status: ${err.message}`));
-        } else if (result && (result as any).changes === 0) {
+        } else if (this && this.changes === 0) {
           reject(new Error(`Improvement ${itemId} not found`));
         } else {
           // Record token usage
           const inputText = JSON.stringify(args);
           const outputText = `Updated improvement ${itemId} to ${status}`;
-          const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'update_improvement_status');
-          
+          const tokenUsage = TokenUsageTracker.getInstance().recordUsage(inputText, outputText, 'update_improvement_status');
           resolve(`Improvement ${itemId} updated to ${status}.\n\nToken usage: ${tokenUsage.total} tokens (${tokenUsage.input} input, ${tokenUsage.output} output)`);
         }
       });
@@ -295,10 +295,19 @@ export class ImprovementManager {
       sql += conditions.join(' AND ');
     }
 
-    // Add sorting
-    const sortBy = args.sortBy || 'dateRequested';
-    const sortOrder = args.sortOrder || 'desc';
-    sql += ` ORDER BY ${sortBy} ${sortOrder}`;
+    // Add sorting with whitelist mapping
+    const sortKey = args.sortBy || 'date';
+    const sortMap: Record<string, string> = {
+      date: 'dateRequested',
+      priority: 'priority',
+      title: 'title',
+      status: 'status',
+      category: 'category',
+      requestedBy: 'requestedBy',
+    };
+    const orderByColumn = sortMap[sortKey] || 'dateRequested';
+    const sortOrder = (String(args.sortOrder).toLowerCase() === 'asc') ? 'ASC' : 'DESC';
+    sql += ` ORDER BY ${orderByColumn} ${sortOrder}`;
 
     // Add pagination
     sql += ' LIMIT ? OFFSET ?';
@@ -364,22 +373,33 @@ export class ImprovementManager {
    */
   async getCodeContextForImprovement(improvement: any): Promise<any[]> {
     const codeContext: any[] = [];
+    const root = path.resolve(process.env.CONTEXT_ROOT || process.cwd());
     
     if (improvement.filesLikelyInvolved && improvement.filesLikelyInvolved.length > 0) {
       for (const file of improvement.filesLikelyInvolved) {
         try {
-          if (fs.existsSync(file)) {
-            const content = fs.readFileSync(file, 'utf8');
+          const resolved = path.resolve(file);
+          if (!(resolved === root || resolved.startsWith(root + path.sep))) {
+            codeContext.push({ file, error: 'Access denied outside allowed root', relevanceScore: 0 });
+            continue;
+          }
+          if (fs.existsSync(resolved)) {
+            const stat = fs.statSync(resolved);
+            if (stat.size > 1_000_000) { // 1MB limit
+              codeContext.push({ file: resolved, error: 'File too large to read', relevanceScore: 0 });
+              continue;
+            }
+            const content = fs.readFileSync(resolved, 'utf8');
             const relevantSection = this.extractRelevantSections(content, improvement);
             
             codeContext.push({
-              file: file,
+              file: resolved,
               content: relevantSection || content.substring(0, 2000) + (content.length > 2000 ? '...' : ''),
               relevanceScore: relevantSection ? 0.8 : 0.5
             });
           } else {
             codeContext.push({
-              file: file,
+              file: resolved,
               error: 'File not found',
               relevanceScore: 0
             });

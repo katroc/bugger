@@ -107,13 +107,16 @@ export class ContextCollectionEngine {
   private dependencyAnalyzer: DependencyAnalyzer;
   private config: ContextCollectionConfig;
   private contextCache: Map<string, CodeContext[]> = new Map();
+  private allowedRoot: string;
 
   constructor(
     rootPath: string = process.cwd(),
     config: Partial<ContextCollectionConfig> = {}
   ) {
-    this.codeAnalyzer = new TreeSitterCodeAnalyzer(rootPath);
-    this.dependencyAnalyzer = new DependencyAnalyzer(rootPath);
+    const resolvedRoot = path.resolve(process.env.CONTEXT_ROOT || rootPath || process.cwd());
+    this.allowedRoot = resolvedRoot;
+    this.codeAnalyzer = new TreeSitterCodeAnalyzer(resolvedRoot);
+    this.dependencyAnalyzer = new DependencyAnalyzer(resolvedRoot);
     this.config = this.mergeWithDefaultConfig(config);
   }
 
@@ -250,11 +253,12 @@ export class ContextCollectionEngine {
       const contexts = StackTraceParser.extractStackTraceContexts(stackTrace);
       
       for (const context of contexts) {
-        // Check if file exists and is readable
-        if (fs.existsSync(context.filePath)) {
+        // Check if file exists and is readable within allowed root
+        const resolvedStackPath = this.safeResolve(context.filePath);
+        if (resolvedStackPath && fs.existsSync(resolvedStackPath)) {
           try {
             const content = await this.readFileSection(
-              context.filePath,
+              resolvedStackPath,
               Math.max(1, context.lineNumber - context.contextLines),
               context.lineNumber + context.contextLines
             );
@@ -263,7 +267,7 @@ export class ContextCollectionEngine {
               const relevanceScore = this.calculateStackTraceRelevance(context.priority, stackTrace.confidence);
               
               sections.push({
-                filePath: context.filePath,
+                filePath: resolvedStackPath,
                 startLine: Math.max(1, context.lineNumber - context.contextLines),
                 endLine: context.lineNumber + context.contextLines,
                 content,
@@ -273,7 +277,7 @@ export class ContextCollectionEngine {
               });
             }
           } catch (error) {
-            console.error(`Error reading stack trace context from ${context.filePath}:`, error);
+            console.error(`Error reading stack trace context from ${resolvedStackPath}:`, error);
           }
         }
       }
@@ -542,9 +546,10 @@ export class ContextCollectionEngine {
       
       // Get relationships for files likely involved
       for (const file of filesLikelyInvolved) {
-        if (fs.existsSync(file)) {
-          const relationship = await this.dependencyAnalyzer.mapFileRelationships(file);
-          fileRelationships.set(file, relationship);
+        const resolved = this.safeResolve(file);
+        if (resolved && fs.existsSync(resolved)) {
+          const relationship = await this.dependencyAnalyzer.mapFileRelationships(resolved);
+          fileRelationships.set(resolved, relationship);
         }
       }
       
@@ -603,10 +608,8 @@ export class ContextCollectionEngine {
     
     // Extract sections from files likely involved
     for (const file of input.filesLikelyInvolved || []) {
-      if (fs.existsSync(file)) {
-        const relevantSections = await this.extractRelevantSectionsFromFile(file, textAnalysis);
-        sections.push(...relevantSections);
-      }
+      const relevantSections = await this.extractRelevantSectionsFromFile(file, textAnalysis);
+      sections.push(...relevantSections);
     }
     
     // Extract sections from dependency analysis
@@ -620,7 +623,11 @@ export class ContextCollectionEngine {
 
   private async readFileSection(filePath: string, startLine: number, endLine: number): Promise<string | null> {
     try {
-      const content = fs.readFileSync(filePath, 'utf8');
+      const resolved = this.safeResolve(filePath);
+      if (!resolved) return null;
+      const stat = fs.statSync(resolved);
+      if (stat.size > this.config.maxFileSize) return null;
+      const content = fs.readFileSync(resolved, 'utf8');
       const lines = content.split('\n');
       return lines.slice(startLine - 1, endLine).join('\n');
     } catch (error) {
@@ -636,7 +643,11 @@ export class ContextCollectionEngine {
     const sections: CodeSection[] = [];
     
     try {
-      const content = fs.readFileSync(filePath, 'utf8');
+      const resolved = this.safeResolve(filePath);
+      if (!resolved) return sections;
+      const stat = fs.statSync(resolved);
+      if (stat.size > this.config.maxFileSize) return sections;
+      const content = fs.readFileSync(resolved, 'utf8');
       const lines = content.split('\n');
       
       // Find lines that contain keywords or entities
@@ -675,7 +686,7 @@ export class ContextCollectionEngine {
         const sectionContent = lines.slice(startLine - 1, endLine).join('\n');
         
         sections.push({
-          filePath,
+          filePath: resolved,
           startLine,
           endLine,
           content: sectionContent,
@@ -684,7 +695,7 @@ export class ContextCollectionEngine {
           relatedEntities: group.entities
         });
       }
-      
+
     } catch (error) {
       console.error(`Error extracting sections from ${filePath}:`, error);
     }
@@ -1020,6 +1031,20 @@ export class ContextCollectionEngine {
       if (oldestKey) {
         this.contextCache.delete(oldestKey);
       }
+    }
+  }
+
+  private safeResolve(p: string): string | null {
+    try {
+      const resolved = path.resolve(p);
+      const root = this.allowedRoot;
+      if (resolved === root || resolved.startsWith(root + path.sep)) {
+        if (this.config.excludePatterns.some((pat) => resolved.includes(pat))) return null;
+        return resolved;
+      }
+      return null;
+    } catch {
+      return null;
     }
   }
 

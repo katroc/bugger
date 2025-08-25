@@ -15,6 +15,7 @@ import { SearchManager } from './search.js';
 import { ContextManager } from './context.js';
 import { WorkflowManager } from './workflows.js';
 import sqlite3 from 'sqlite3';
+import { log } from './logger.js';
 
 class ProjectManagementServer {
   private server: Server;
@@ -25,6 +26,7 @@ class ProjectManagementServer {
   private searchManager: SearchManager;
   private contextManager: ContextManager;
   private workflowManager: WorkflowManager;
+  private ftsRebuildTimer?: NodeJS.Timeout;
 
   constructor() {
     this.server = new Server(
@@ -47,14 +49,30 @@ class ProjectManagementServer {
     this.setupToolHandlers();
   }
 
+  private scheduleFtsRebuild(delayMs: number = 1500) {
+    try {
+      if (this.ftsRebuildTimer) clearTimeout(this.ftsRebuildTimer);
+      this.ftsRebuildTimer = setTimeout(() => {
+        log.debug('Triggering debounced FTS index rebuild');
+        this.searchManager
+          .rebuildIndex(this.db)
+          .then(() => log.debug('FTS index rebuild complete'))
+          .catch((e) => { log.debug('FTS rebuild skipped/failed (likely no FTS5):', e?.message || e); });
+      }, delayMs);
+    } catch {
+      // noop
+    }
+  }
+
   private async initDb() {
     const dbPath = process.env.DB_PATH || 'bugger.db';
     
     this.db = new sqlite3.Database(dbPath, (err) => {
       if (err) {
-        console.error('Error opening database:', err.message);
+        log.error('Error opening database:', err.message);
         process.exit(1);
       }
+      log.info('Database opened at', dbPath);
     });
 
     // Create tables if they don't exist
@@ -139,6 +157,15 @@ class ProjectManagementServer {
       )`,
     ];
 
+    // Improve concurrency and durability for agent workloads
+    await new Promise<void>((resolve, reject) => {
+      this.db.run('PRAGMA journal_mode=WAL', (err) => (err ? reject(err) : resolve()));
+    });
+    await new Promise<void>((resolve, reject) => {
+      this.db.run('PRAGMA synchronous=NORMAL', (err) => (err ? reject(err) : resolve()));
+    });
+    log.debug('SQLite PRAGMAs set: WAL, synchronous=NORMAL');
+
     for (const table of tables) {
       await new Promise<void>((resolve, reject) => {
         this.db.run(table, (err) => {
@@ -148,6 +175,79 @@ class ProjectManagementServer {
             resolve();
           }
         });
+      });
+    }
+
+    // Helpful indexes for common filters and sorts
+    const indexes = [
+      // bugs
+      `CREATE INDEX IF NOT EXISTS idx_bugs_status ON bugs(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_bugs_priority ON bugs(priority)`,
+      `CREATE INDEX IF NOT EXISTS idx_bugs_component ON bugs(component)`,
+      `CREATE INDEX IF NOT EXISTS idx_bugs_date ON bugs(dateReported)`,
+      // features
+      `CREATE INDEX IF NOT EXISTS idx_features_status ON feature_requests(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_features_priority ON feature_requests(priority)`,
+      `CREATE INDEX IF NOT EXISTS idx_features_category ON feature_requests(category)`,
+      `CREATE INDEX IF NOT EXISTS idx_features_requestedBy ON feature_requests(requestedBy)`,
+      `CREATE INDEX IF NOT EXISTS idx_features_date ON feature_requests(dateRequested)`,
+      // improvements
+      `CREATE INDEX IF NOT EXISTS idx_improvements_status ON improvements(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_improvements_priority ON improvements(priority)`,
+      `CREATE INDEX IF NOT EXISTS idx_improvements_category ON improvements(category)`,
+      `CREATE INDEX IF NOT EXISTS idx_improvements_requestedBy ON improvements(requestedBy)`,
+      `CREATE INDEX IF NOT EXISTS idx_improvements_date ON improvements(dateRequested)`,
+      // relationships
+      `CREATE INDEX IF NOT EXISTS idx_relationships_from ON item_relationships(fromItem)`,
+      `CREATE INDEX IF NOT EXISTS idx_relationships_to ON item_relationships(toItem)`
+    ];
+
+    for (const idx of indexes) {
+      await new Promise<void>((resolve, reject) => {
+        this.db.run(idx, (err) => (err ? reject(err) : resolve()));
+      });
+    }
+
+    // Best-effort FTS5 setup and triggers for auto-sync of index
+    const ftsStatements = [
+      `CREATE VIRTUAL TABLE IF NOT EXISTS item_fts USING fts5(id UNINDEXED, type UNINDEXED, title, description)`,
+      // Bugs triggers
+      `CREATE TRIGGER IF NOT EXISTS trg_bugs_ai AFTER INSERT ON bugs BEGIN
+         INSERT INTO item_fts(id,type,title,description) VALUES (new.id,'bug',new.title,new.description);
+       END;`,
+      `CREATE TRIGGER IF NOT EXISTS trg_bugs_au AFTER UPDATE ON bugs BEGIN
+         DELETE FROM item_fts WHERE id=old.id AND type='bug';
+         INSERT INTO item_fts(id,type,title,description) VALUES (new.id,'bug',new.title,new.description);
+       END;`,
+      `CREATE TRIGGER IF NOT EXISTS trg_bugs_ad AFTER DELETE ON bugs BEGIN
+         DELETE FROM item_fts WHERE id=old.id AND type='bug';
+       END;`,
+      // Features triggers
+      `CREATE TRIGGER IF NOT EXISTS trg_features_ai AFTER INSERT ON feature_requests BEGIN
+         INSERT INTO item_fts(id,type,title,description) VALUES (new.id,'feature',new.title,new.description);
+       END;`,
+      `CREATE TRIGGER IF NOT EXISTS trg_features_au AFTER UPDATE ON feature_requests BEGIN
+         DELETE FROM item_fts WHERE id=old.id AND type='feature';
+         INSERT INTO item_fts(id,type,title,description) VALUES (new.id,'feature',new.title,new.description);
+       END;`,
+      `CREATE TRIGGER IF NOT EXISTS trg_features_ad AFTER DELETE ON feature_requests BEGIN
+         DELETE FROM item_fts WHERE id=old.id AND type='feature';
+       END;`,
+      // Improvements triggers
+      `CREATE TRIGGER IF NOT EXISTS trg_improvements_ai AFTER INSERT ON improvements BEGIN
+         INSERT INTO item_fts(id,type,title,description) VALUES (new.id,'improvement',new.title,new.description);
+       END;`,
+      `CREATE TRIGGER IF NOT EXISTS trg_improvements_au AFTER UPDATE ON improvements BEGIN
+         DELETE FROM item_fts WHERE id=old.id AND type='improvement';
+         INSERT INTO item_fts(id,type,title,description) VALUES (new.id,'improvement',new.title,new.description);
+       END;`,
+      `CREATE TRIGGER IF NOT EXISTS trg_improvements_ad AFTER DELETE ON improvements BEGIN
+         DELETE FROM item_fts WHERE id=old.id AND type='improvement';
+       END;`,
+    ];
+    for (const stmt of ftsStatements) {
+      await new Promise<void>((resolve) => {
+        this.db.run(stmt, () => resolve()); // Ignore errors if FTS5 not available
       });
     }
   }
@@ -630,6 +730,15 @@ class ProjectManagementServer {
               additionalProperties: false
             }
           },
+          {
+            name: 'rebuild_search_index',
+            description: 'Rebuild the full-text search index for semantic search (FTS5)',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+              additionalProperties: false
+            }
+          },
         ]
       };
     });
@@ -643,6 +752,7 @@ class ProjectManagementServer {
         switch (name) {
           case 'create_item':
             result = await this.withTransaction(() => this.createItem(args));
+            this.scheduleFtsRebuild();
             break;
 
           case 'list_items':
@@ -651,6 +761,7 @@ class ProjectManagementServer {
 
           case 'update_item_status':
             result = await this.withTransaction(() => this.updateItemStatus(args));
+            this.scheduleFtsRebuild();
             break;
 
           case 'search_items':
@@ -672,10 +783,12 @@ class ProjectManagementServer {
 
           case 'bulk_update_items':
             result = await this.withTransaction(() => this.bulkUpdateItems(args));
+            this.scheduleFtsRebuild();
             break;
 
           case 'execute_workflow':
             result = await this.withTransaction(() => this.workflowManager.executeWorkflow(this.db, args));
+            this.scheduleFtsRebuild();
             break;
 
           case 'manage_contexts':
@@ -684,6 +797,10 @@ class ProjectManagementServer {
 
           case 'search_semantic':
             result = await this.searchManager.performSemanticSearch(this.db, args);
+            break;
+
+          case 'rebuild_search_index':
+            result = await this.searchManager.rebuildIndex(this.db);
             break;
 
 
@@ -705,6 +822,18 @@ class ProjectManagementServer {
     await this.initDb();
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
+    log.info('bugger-mcp server connected over stdio');
+
+    const cleanup = () => {
+      try {
+        log.info('Shutting down, closing database...');
+        this.db?.close(() => process.exit(0));
+      } catch {
+        process.exit(0);
+      }
+    };
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
   }
 }
 

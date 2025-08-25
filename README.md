@@ -83,7 +83,8 @@ Once installed, you'll have access to these MCP tools:
 ### Advanced Features
 - **execute_workflow**: Execute predefined workflows for common multi-step operations like creating and linking multiple items, batch context collection, or status transitions. Use to automate complex project management tasks.
 - **manage_contexts**: Unified context management for tasks - collect, get, check freshness, add, update, or remove code contexts. Use to maintain relevant code snippets, file references, and dependencies for each item.
-- **search_semantic**: Perform semantic search using vector embeddings to find similar items based on meaning rather than keywords. Use to discover related bugs, features, or improvements by context and intent.
+- **search_semantic**: Perform semantic search using FTS-based ranking with a similarity fallback to find related items by meaning, not just keywords.
+- **rebuild_search_index**: Rebuild the FTS index. Usually not required (auto-sync via triggers), but useful after large imports or enabling FTS5.
 
 ## Usage Examples
 
@@ -128,6 +129,15 @@ After installation, you can use natural language with your AI assistant to manag
 - "Search for bugs semantically related to 'database connection problems'"
 - "Discover features similar to 'dark mode implementation' through semantic matching"
 - "Find improvements semantically related to 'performance optimization'"
+
+#### Search Indexing Notes
+- The server automatically refreshes its full-text index shortly after item mutations (create/update/bulk/workflow), so agents can run `search_semantic` without manual steps.
+- For large imports or after enabling FTS5 on your SQLite build, run the `rebuild_search_index` tool once to initialize/refill the index.
+- If FTS5 is unavailable, the server falls back to approximate similarity (Jaccard) so results still work, just less precise.
+
+#### File Context Safety
+- The server reads file contexts only within `CONTEXT_ROOT` (default: the current working directory). Paths outside this root are denied for safety when agents provide file lists.
+- Very large files (>1MB) are skipped to keep responses fast and resource usage low for agents.
 
 ## Context Management
 
@@ -195,3 +205,7 @@ npm run dev
 ## License
 
 [MIT](LICENSE)
+## Configuration
+- `DB_PATH`: Path to the SQLite database file (default: `bugger.db`).
+- `CONTEXT_ROOT`: Absolute path restricting file context reads to a safe subtree (default: current working directory). Paths outside this root are denied.
+- `LOG_LEVEL`: `debug`, `info`, `warn`, or `error` (default: `info`). Controls server logging verbosity for easier agent/operator troubleshooting.

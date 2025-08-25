@@ -7,7 +7,11 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc && node dist/index.js"
+    "dev": "tsc && node dist/index.js",
+    "test": "npm run build && node dist/stack-trace-parser.test.js && node dist/manager-update-and-sort.test.js && node dist/semantic-search-fts.test.js",
+    "lint": "eslint 'src/**/*.{ts,tsx}'",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "keywords": [
     "mcp",
@@ -39,9 +43,16 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.8",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "eslint": "^8.57.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "prettier": "^3.3.3"
   },
   "bin": {
     "bugger-mcp": "dist/index.js"
+  },
+  "eslintConfig": {
+    "extends": ["./.eslintrc.cjs"]
   }
 }
