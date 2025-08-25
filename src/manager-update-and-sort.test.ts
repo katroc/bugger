@@ -101,7 +101,7 @@ async function seedData(db: sqlite3.Database) {
   ]);
 
   // One improvement
-  await run(db, `INSERT INTO improvements VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+  await run(db, `INSERT INTO improvements VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
     'IMP-001', 'Proposed', 'Medium', '2025-06-01', null, 'General', 'carol', 'I1', 'desc', 'cur', 'des', JSON.stringify([]), null, null, JSON.stringify([]), JSON.stringify([]), 'Medium', JSON.stringify([])
   ]);
 }
@@ -158,7 +158,9 @@ async function testGlobalSearchSort(db: sqlite3.Database) {
   const out = await search.searchItems(db, { type: 'all', sortBy: 'date', sortOrder: 'asc', limit: 10, offset: 0 });
   // searchItems returns a formatted string, not raw rows. Check ordering via ID presence.
   assert(typeof out === 'string', 'searchItems returns string');
-  assert(out.indexOf('FR-001') < out.indexOf('Bug #002'), 'global sort by date asc orders by item date fields');
+  // Bug #001 (2025-01-01) should appear before FR-001 (2025-05-01)
+  assert(out.indexOf('Bug #001') > -1 && out.indexOf('FR-001') > -1, 'IDs present in output');
+  assert(out.indexOf('Bug #001') < out.indexOf('FR-001'), 'global sort orders by earliest date first across types');
   console.log('✓ global search sorting across mixed types');
 }
 
@@ -186,4 +188,3 @@ async function main() {
 }
 
 main();
-
