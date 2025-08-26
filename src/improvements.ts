@@ -40,6 +40,27 @@ export class ImprovementManager {
   async createImprovement(db: sqlite3.Database, args: any): Promise<string> {
     this.tokenTracker.startOperation('create_improvement');
     
+    // Validate required fields and support common aliases
+    const title: string | undefined = args.title;
+    const description: string | undefined = args.description;
+    // Support alias: currentBehavior (sometimes used inconsistently) → currentState
+    const currentStateArg: string | undefined = args.currentState ?? args.currentBehavior;
+    // Support alias: expectedBehavior → desiredState
+    const desiredStateArg: string | undefined = args.desiredState ?? args.expectedBehavior;
+
+    if (!title) {
+      throw new Error('title is required for improvements');
+    }
+    if (!description) {
+      throw new Error('description is required for improvements');
+    }
+    if (!currentStateArg) {
+      throw new Error('currentState is required for improvements (alias: currentBehavior)');
+    }
+    if (!desiredStateArg) {
+      throw new Error('desiredState is required for improvements (alias: expectedBehavior)');
+    }
+    
     const improvement: Improvement = {
       id: args.improvementId || await this.generateNextIdWithRetry(db, 'improvement'),
       status: 'Proposed',
@@ -47,10 +68,10 @@ export class ImprovementManager {
       dateRequested: new Date().toISOString().split('T')[0],
       category: args.category || 'General',
       requestedBy: args.requestedBy,
-      title: args.title,
-      description: args.description,
-      currentState: args.currentState,
-      desiredState: args.desiredState,
+      title,
+      description,
+      currentState: currentStateArg,
+      desiredState: desiredStateArg,
       acceptanceCriteria: args.acceptanceCriteria || [],
       implementationDetails: args.implementationDetails,
       potentialImplementation: args.potentialImplementation,
@@ -227,7 +248,21 @@ export class ImprovementManager {
   async searchImprovements(db: sqlite3.Database, query: string, args: any): Promise<any[]> {
     this.tokenTracker.startOperation('search_improvements');
     
-    const searchFields = args.searchFields || ['title', 'description', 'category'];
+    // Normalize and whitelist search fields, supporting common aliases
+    const aliasMap: Record<string, string> = {
+      currentBehavior: 'currentState',
+      expectedBehavior: 'desiredState',
+    };
+    const allowedFields = new Set(['title', 'description', 'category', 'currentState', 'desiredState']);
+    const requestedFields: string[] = Array.isArray(args.searchFields)
+      ? args.searchFields
+      : ['title', 'description', 'category'];
+    const searchFields = requestedFields
+      .map((f) => aliasMap[f] || f)
+      .filter((f) => allowedFields.has(f));
+    if (searchFields.length === 0) {
+      searchFields.push('title', 'description', 'category');
+    }
     const limit = args.limit || 50;
     const offset = args.offset || 0;
     
