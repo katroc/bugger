@@ -86,7 +86,7 @@ export class SearchManager {
           const embedding = this.fakeEmbed(text); // Deterministic local embedding
           await new Promise<void>((resolve, reject) => {
             db.run(
-              'INSERT INTO item_embeddings(embedding) VALUES (vector_to_blob(?))',
+              'INSERT INTO item_embeddings(embedding) VALUES (?)',
               [Buffer.from(new Float32Array(embedding).buffer)],
               function (err) {
                 if (err) return reject(err);
@@ -139,7 +139,7 @@ export class SearchManager {
             `SELECT m.id, m.type, distance
              FROM item_embeddings e
              JOIN item_embedding_meta m ON m.rowid = e.rowid
-             WHERE e.embedding MATCH vector_to_blob(?)
+             WHERE e.embedding MATCH ?
              ORDER BY distance ASC
              LIMIT ?`,
             [Buffer.from(new Float32Array(qvec).buffer), limit],

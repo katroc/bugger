@@ -1007,7 +1007,7 @@ class ProjectManagementServer {
         const emb = this.generateDeterministicEmbedding(text, dim);
         const blob = Buffer.from(new Float32Array(emb).buffer);
         const rowid = await new Promise<number>((resolve, reject) => {
-          this.db.run('INSERT INTO item_embeddings(embedding) VALUES (vector_to_blob(?))', [blob], function (err) {
+          this.db.run('INSERT INTO item_embeddings(embedding) VALUES (?)', [blob], function (err) {
             if (err) return reject(err);
             resolve((this as any).lastID as number);
           });
@@ -1096,11 +1096,11 @@ class ProjectManagementServer {
     const blob = Buffer.from(new Float32Array(embedding).buffer);
     if (existing && existing.rowid) {
       await new Promise<void>((resolve, reject) => {
-        this.db.run('UPDATE item_embeddings SET embedding = vector_to_blob(?) WHERE rowid = ?', [blob, existing.rowid], (err)=> err?reject(err):resolve());
+        this.db.run('UPDATE item_embeddings SET embedding = ? WHERE rowid = ?', [blob, existing.rowid], (err)=> err?reject(err):resolve());
       });
     } else {
       const rowid = await new Promise<number>((resolve, reject) => {
-        this.db.run('INSERT INTO item_embeddings(embedding) VALUES (vector_to_blob(?))', [blob], function (err) {
+        this.db.run('INSERT INTO item_embeddings(embedding) VALUES (?)', [blob], function (err) {
           if (err) return reject(err);
           resolve((this as any).lastID as number);
         });
