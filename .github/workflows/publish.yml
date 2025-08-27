@@ -32,6 +32,21 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check if version already published
+        id: check_published
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          VER=$(node -p "require('./package.json').version")
+          echo "Package: $PKG | Version: $VER"
+          # Authenticate for npm view if the package is private or rate-limited
+          if [ -n "$NPM_TOKEN" ]; then
+            npm config set //registry.npmjs.org/:_authToken=$NPM_TOKEN
+          fi
+          EXISTS=$(npm view "$PKG" versions --json 2>/dev/null | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const a=JSON.parse(d||'[]');console.log(a.includes(process.env.VER)?'yes':'no')}catch{console.log('no')}})" || echo 'no')
+          echo "already_published=$EXISTS" >> $GITHUB_OUTPUT
+
       - name: Verify tag matches package version
         if: github.event_name == 'release'
         run: |
@@ -44,9 +59,13 @@ jobs:
           fi
 
       - name: Publish to npm
+        if: steps.check_published.outputs.already_published != 'yes'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # Use provenance and public access for OSS packages
           npm publish --provenance --access public
 
+      - name: Skip publish (already published)
+        if: steps.check_published.outputs.already_published == 'yes'
+        run: echo "Version already published; skipping npm publish."
