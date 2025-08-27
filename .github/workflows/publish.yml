@@ -3,7 +3,6 @@ name: Publish to npm
 on:
   release:
     types: [published]
-  workflow_dispatch: {}
 
 concurrency:
   group: publish-npm
@@ -12,13 +11,18 @@ concurrency:
 jobs:
   publish:
     name: Publish package
+    # Only publish for releases created by release-please bot
+    if: github.event_name == 'release' && github.event.release.author.login == 'release-please[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write # for npm provenance with Node 20+
     steps:
-      - name: Checkout
+      - name: Checkout release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
 
       - name: Use Node.js 20
         uses: actions/setup-node@v4
@@ -57,6 +61,13 @@ jobs:
             echo "::error::Release tag (v$TAG) does not match package.json version ($PKG_VERSION)"
             exit 1
           fi
+
+      - name: Show current and published versions
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          VER=$(node -p "require('./package.json').version")
+          echo "Package: $PKG | Local version: $VER"
+          echo "Registry latest: $(npm view "$PKG" version || echo 'n/a')"
 
       - name: Publish to npm
         if: steps.check_published.outputs.already_published != 'yes'
