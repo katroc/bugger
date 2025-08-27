@@ -12,6 +12,8 @@ concurrency:
 jobs:
   publish:
     name: Publish package
+    # Only publish for releases created by release-please bot
+    if: github.event_name == 'release' && github.event.release.author.login == 'release-please[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,10 +45,16 @@ jobs:
             exit 1
           fi
 
+      - name: Show current and published versions
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          VER=$(node -p "require('./package.json').version")
+          echo "Package: $PKG | Local version: $VER"
+          echo "Registry latest: $(npm view "$PKG" version || echo 'n/a')"
+
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # Use provenance and public access for OSS packages
           npm publish --provenance --access public
-
