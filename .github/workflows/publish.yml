@@ -3,7 +3,6 @@ name: Publish to npm
 on:
   release:
     types: [published]
-  workflow_dispatch: {}
 
 concurrency:
   group: publish-npm
@@ -17,8 +16,12 @@ jobs:
       contents: read
       id-token: write # for npm provenance with Node 20+
     steps:
-      - name: Checkout
+      - name: Checkout release tag
         uses: actions/checkout@v4
+        with:
+          # Ensure we build from the exact release tag contents
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
 
       - name: Use Node.js 20
         uses: actions/setup-node@v4
