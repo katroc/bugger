@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/katroc/bugger/compare/v1.0.0...v1.0.1) (2025-08-27)
+
+
+### Bug Fixes
+
+* **improvements:** accept aliases for currentState/desiredState and validate required fields ([a294273](https://github.com/katroc/bugger/commit/a294273507035e8731c62ef53fb0bb35e856f0b7))
+* **improvements:** accept field aliases + add MCP tests; enable CI ([5dc262b](https://github.com/katroc/bugger/commit/5dc262ba53c47e4f68f7b3def0ba099d5f1d5999))
+
 ## 1.0.0 (2025-08-25)
 
 
