@@ -27,6 +27,7 @@ class ProjectManagementServer {
   private contextManager: ContextManager;
   private workflowManager: WorkflowManager;
   private ftsRebuildTimer?: NodeJS.Timeout;
+  private embedBuildTimer?: NodeJS.Timeout;
 
   constructor() {
     this.server = new Server(
@@ -58,6 +59,23 @@ class ProjectManagementServer {
           .rebuildIndex(this.db)
           .then(() => log.debug('FTS index rebuild complete'))
           .catch((e) => { log.debug('FTS rebuild skipped/failed (likely no FTS5):', e?.message || e); });
+      }, delayMs);
+    } catch {
+      // noop
+    }
+  }
+
+  private scheduleEmbeddingBuild(delayMs: number = 1500) {
+    try {
+      const vecSource = String(process.env.VEC_SOURCE || 'client').toLowerCase();
+      const autoBg = String(process.env.AUTO_EMBED_BG || process.env.AUTO_EMBED_FALLBACK || '').toLowerCase() === '1';
+      if (!(vecSource === 'auto' || autoBg)) return;
+      if (this.embedBuildTimer) clearTimeout(this.embedBuildTimer);
+      this.embedBuildTimer = setTimeout(() => {
+        log.debug('Triggering debounced embedding build for new items');
+        this.buildMissingEmbeddings()
+          .then(() => log.debug('Embedding build complete'))
+          .catch((e) => { log.debug('Embedding build skipped/failed:', e?.message || e); });
       }, delayMs);
     } catch {
       // noop
@@ -208,6 +226,9 @@ class ProjectManagementServer {
       log.debug('sqlite-vec not available; vector search disabled:', e?.message || e);
     }
 
+    // Optionally kick off background embedding build at startup for any missing items
+    this.scheduleEmbeddingBuild(1000);
+
     // Helpful indexes for common filters and sorts
     const indexes = [
       // bugs
@@ -315,16 +336,19 @@ class ProjectManagementServer {
       case 'bug': {
         const res = await this.bugManager.createBug(this.db, args);
         await this.maybeAttachEmbedding(res, 'bug', args);
+        this.scheduleEmbeddingBuild();
         return res;
       }
       case 'feature': {
         const res = await this.featureManager.createFeatureRequest(this.db, args);
         await this.maybeAttachEmbedding(res, 'feature', args);
+        this.scheduleEmbeddingBuild();
         return res;
       }
       case 'improvement': {
         const res = await this.improvementManager.createImprovement(this.db, args);
         await this.maybeAttachEmbedding(res, 'improvement', args);
+        this.scheduleEmbeddingBuild();
         return res;
       }
       default:
@@ -961,6 +985,62 @@ class ProjectManagementServer {
     for (const v of vec) sum += v * v;
     const denom = Math.sqrt(sum) || 1;
     return vec.map((v) => v / denom);
+  }
+
+  // Build embeddings for items missing vectors using deterministic local generator
+  private async buildMissingEmbeddings(): Promise<void> {
+    const dim = this.getVectorDim();
+    // Ensure vec tables exist
+    await new Promise<void>((resolve, reject) => {
+      this.db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS item_embeddings USING vec0(embedding float[${dim}])`, (err)=> err?reject(err):resolve());
+    });
+    await new Promise<void>((resolve, reject) => {
+      this.db.run(`CREATE TABLE IF NOT EXISTS item_embedding_meta (rowid INTEGER PRIMARY KEY, id TEXT NOT NULL, type TEXT NOT NULL)`, (err)=> err?reject(err):resolve());
+    });
+
+    const embedMissingOf = async (query: string, type: 'bug'|'feature'|'improvement') => {
+      const rows: any[] = await new Promise((resolve, reject) => {
+        this.db.all(query, (err, rows) => (err ? reject(err) : resolve(rows || [])));
+      });
+      for (const row of rows) {
+        const text = `${row.title || ''} ${row.description || ''}`.trim();
+        const emb = this.generateDeterministicEmbedding(text, dim);
+        const blob = Buffer.from(new Float32Array(emb).buffer);
+        const rowid = await new Promise<number>((resolve, reject) => {
+          this.db.run('INSERT INTO item_embeddings(embedding) VALUES (vector_to_blob(?))', [blob], function (err) {
+            if (err) return reject(err);
+            resolve((this as any).lastID as number);
+          });
+        });
+        await new Promise<void>((resolve, reject) => {
+          this.db.run('INSERT INTO item_embedding_meta(rowid, id, type) VALUES (?,?,?)', [rowid, row.id, type], (err)=> err?reject(err):resolve());
+        });
+      }
+    };
+
+    await embedMissingOf(
+      `SELECT b.id, b.title, b.description
+       FROM bugs b
+       LEFT JOIN item_embedding_meta m ON m.id = b.id AND m.type = 'bug'
+       WHERE m.rowid IS NULL`,
+      'bug'
+    );
+
+    await embedMissingOf(
+      `SELECT f.id, f.title, f.description
+       FROM feature_requests f
+       LEFT JOIN item_embedding_meta m ON m.id = f.id AND m.type = 'feature'
+       WHERE m.rowid IS NULL`,
+      'feature'
+    );
+
+    await embedMissingOf(
+      `SELECT i.id, i.title, i.description
+       FROM improvements i
+       LEFT JOIN item_embedding_meta m ON m.id = i.id AND m.type = 'improvement'
+       WHERE m.rowid IS NULL`,
+      'improvement'
+    );
   }
 
   private getVectorDim(): number {
