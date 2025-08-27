@@ -3,6 +3,12 @@ name: Publish to npm
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g., v1.0.1)'
+        required: true
+        type: string
 
 concurrency:
   group: publish-npm
@@ -11,17 +17,19 @@ concurrency:
 jobs:
   publish:
     name: Publish package
-    # Only publish for releases created by release-please bot
-    if: github.event_name == 'release' && github.event.release.author.login == 'release-please[bot]'
+    # Allow: releases by release-please bot OR manual dispatch with explicit tag
+    if: >
+      (github.event_name == 'release' && github.event.release.author.login == 'release-please[bot]') ||
+      (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write # for npm provenance with Node 20+
     steps:
-      - name: Checkout release tag
+      - name: Checkout target ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
           fetch-depth: 0
 
       - name: Use Node.js 20
@@ -41,20 +49,30 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          set -e
           PKG=$(node -p "require('./package.json').name")
-          VER=$(node -p "require('./package.json').version")
-          echo "Package: $PKG | Version: $VER"
-          # Authenticate for npm view if needed
+          VER_FILE=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_EVENT_NAME}" = "release" ] && [ -n "${GITHUB_REF_NAME}" ]; then
+            VER="${GITHUB_REF_NAME#v}"
+          else
+            VER="$VER_FILE"
+          fi
+          echo "Package: $PKG | Version(file): $VER_FILE | Version(checked): $VER"
           if [ -n "$NPM_TOKEN" ]; then
             npm config set //registry.npmjs.org/:_authToken=$NPM_TOKEN
           fi
-          EXISTS=$(npm view "$PKG" versions --json 2>/dev/null | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const a=JSON.parse(d||'[]');console.log(a.includes(process.env.VER)?'yes':'no')}catch{console.log('no')}})" || echo 'no')
+          if npm view "$PKG@$VER" version >/dev/null 2>&1; then
+            EXISTS=yes
+          else
+            EXISTS=no
+          fi
           echo "already_published=$EXISTS" >> $GITHUB_OUTPUT
 
       - name: Verify tag matches package version
-        if: github.event_name == 'release'
+        if: always()
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG_INPUT="${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}"
+          TAG="${TAG_INPUT#v}"
           PKG_VERSION=$(node -p "require('./package.json').version")
           echo "Tag: $TAG | package.json: $PKG_VERSION"
           if [ "$TAG" != "$PKG_VERSION" ]; then
