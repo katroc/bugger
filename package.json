@@ -10,6 +10,7 @@
     "dev": "tsc && node dist/index.js",
     "test": "npm run build && node dist/stack-trace-parser.test.js && node dist/manager-update-and-sort.test.js && node dist/semantic-search-fts.test.js && node dist/mcp-tools.test.js",
     "test:mcp": "npm run build && node dist/mcp-tools.test.js",
+    "test:vec": "npm run build && node dist/sqlite-vec-smoke.test.js",
     "lint": "eslint 'src/**/*.{ts,tsx}'",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
