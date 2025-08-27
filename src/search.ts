@@ -68,10 +68,11 @@ export class SearchManager {
       ));
     }
 
-    // Rebuild vector index if sqlite-vec present
+    // Rebuild vector index if sqlite-vec present and vector source is not client-supplied
     const vecOk = await this.ensureVec(db);
-    if (vecOk) {
-      log.info('Rebuilding vector index (sqlite-vec)');
+    const vecSource = String(process.env.VEC_SOURCE || 'client').toLowerCase();
+    if (vecOk && vecSource !== 'client') {
+      log.info('Rebuilding vector index (sqlite-vec, source=auto)');
       await new Promise<void>((resolve, reject) => db.run('DELETE FROM item_embeddings', (e)=> e?reject(e):resolve()));
       await new Promise<void>((resolve, reject) => db.run('DELETE FROM item_embedding_meta', (e)=> e?reject(e):resolve()));
 
@@ -104,6 +105,8 @@ export class SearchManager {
       await embedAll('SELECT id, title, description FROM bugs', 'bug');
       await embedAll('SELECT id, title, description FROM feature_requests', 'feature');
       await embedAll('SELECT id, title, description FROM improvements', 'improvement');
+    } else if (vecOk) {
+      log.info('Vector index present (sqlite-vec, source=client). Skipping vector rebuild.');
     }
 
     const parts: string[] = [];

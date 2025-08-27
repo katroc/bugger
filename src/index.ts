@@ -312,12 +312,21 @@ class ProjectManagementServer {
     const { type } = args;
     
     switch (type) {
-      case 'bug':
-        return this.bugManager.createBug(this.db, args);
-      case 'feature':
-        return this.featureManager.createFeatureRequest(this.db, args);
-      case 'improvement':
-        return this.improvementManager.createImprovement(this.db, args);
+      case 'bug': {
+        const res = await this.bugManager.createBug(this.db, args);
+        await this.maybeAttachEmbedding(res, 'bug', args);
+        return res;
+      }
+      case 'feature': {
+        const res = await this.featureManager.createFeatureRequest(this.db, args);
+        await this.maybeAttachEmbedding(res, 'feature', args);
+        return res;
+      }
+      case 'improvement': {
+        const res = await this.improvementManager.createImprovement(this.db, args);
+        await this.maybeAttachEmbedding(res, 'improvement', args);
+        return res;
+      }
       default:
         throw new Error(`Unknown item type: ${type}`);
     }
@@ -441,6 +450,14 @@ class ProjectManagementServer {
                 // Improvement-specific fields
                 currentState: { type: 'string', description: 'Current state (improvements only)' },
                 desiredState: { type: 'string', description: 'Desired state after improvement (improvements only)' },
+                // Optional vector embedding supplied by client agent
+                embedding: {
+                  type: 'array',
+                  items: { type: 'number' },
+                  description: 'Optional vector embedding supplied by client for semantic search'
+                },
+                embeddingModel: { type: 'string', description: 'Model name for the supplied embedding' },
+                embeddingDim: { type: 'number', description: 'Embedding dimension (must match server vec dim)' },
               },
               required: ['type', 'title', 'description', 'priority'],
               additionalProperties: false
@@ -769,6 +786,31 @@ class ProjectManagementServer {
               additionalProperties: false
             }
           },
+          {
+            name: 'get_search_capabilities',
+            description: 'Report server search capabilities (FTS/vector availability and vector dimension)',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+              additionalProperties: false
+            }
+          },
+          {
+            name: 'set_item_embedding',
+            description: 'Upsert a client-supplied embedding for an item (bug/feature/improvement)',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                itemId: { type: 'string', description: 'Item ID (e.g., Bug #001, FR-001, IMP-001)' },
+                type: { type: 'string', enum: ['bug', 'feature', 'improvement'], description: 'Item type (optional if inferable from ID)' },
+                embedding: { type: 'array', items: { type: 'number' }, description: 'Embedding vector' },
+                embeddingModel: { type: 'string', description: 'Model name of the embedding' },
+                embeddingDim: { type: 'number', description: 'Embedding dimension' }
+              },
+              required: ['itemId', 'embedding'],
+              additionalProperties: false
+            }
+          },
         ]
       };
     });
@@ -833,6 +875,16 @@ class ProjectManagementServer {
             result = await this.searchManager.rebuildIndex(this.db);
             break;
 
+          case 'get_search_capabilities': {
+            const caps = await this.getSearchCapabilities();
+            result = JSON.stringify(caps);
+            break;
+          }
+
+          case 'set_item_embedding':
+            result = await this.withTransaction(() => this.setItemEmbedding(args));
+            break;
+
 
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
@@ -864,6 +916,92 @@ class ProjectManagementServer {
     };
     process.on('SIGINT', cleanup);
     process.on('SIGTERM', cleanup);
+  }
+
+  private extractIdFromCreateResponse(response: string, type: 'bug'|'feature'|'improvement'): string | null {
+    const match = response.match(/(Bug #\d+|FR-\d+|IMP-\d+)/);
+    return match ? match[1] : null;
+  }
+
+  private async maybeAttachEmbedding(createResponse: string, type: 'bug'|'feature'|'improvement', args: any): Promise<void> {
+    try {
+      const { embedding, embeddingModel, embeddingDim } = args || {};
+      if (!embedding || !Array.isArray(embedding) || embedding.length === 0) return;
+      const itemId = this.extractIdFromCreateResponse(createResponse, type);
+      if (!itemId) return;
+      await this.setItemEmbedding({ itemId, type, embedding, embeddingModel, embeddingDim });
+    } catch {
+      // Non-fatal: ignore embedding attach failures
+    }
+  }
+
+  private getVectorDim(): number {
+    const n = Number(process.env.VEC_DIM || 128);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 128;
+  }
+
+  private async getSearchCapabilities(): Promise<{ ftsEnabled: boolean; vecEnabled: boolean; vecDim: number; vecSource: string }>
+  {
+    // Probe FTS via ensure call in SearchManager
+    const ftsEnabled = await (async () => {
+      try { await this.searchManager.rebuildIndex(this.db); return true; } catch { return false; }
+    })();
+    const vecEnabled = await (async () => {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          this.db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS item_embeddings USING vec0(embedding float[${this.getVectorDim()}])`, (err)=> err?reject(err):resolve());
+        });
+        return true;
+      } catch { return false; }
+    })();
+    const vecSource = String(process.env.VEC_SOURCE || 'client').toLowerCase();
+    return { ftsEnabled, vecEnabled, vecDim: this.getVectorDim(), vecSource };
+  }
+
+  private async setItemEmbedding(args: any): Promise<string> {
+    const { itemId, type, embedding, embeddingModel, embeddingDim } = args;
+    if (!itemId || !embedding || !Array.isArray(embedding)) {
+      throw new Error('itemId and embedding array are required');
+    }
+    const itemType = type || (itemId.startsWith('Bug') ? 'bug' : itemId.startsWith('FR-') ? 'feature' : itemId.startsWith('IMP-') ? 'improvement' : undefined);
+    if (!itemType) throw new Error('Unable to infer item type from itemId; please provide type');
+
+    const dim = Number(embeddingDim || this.getVectorDim());
+    if (embedding.length !== dim) {
+      throw new Error(`Embedding dimension mismatch: expected ${dim}, got ${embedding.length}`);
+    }
+
+    // Ensure sqlite-vec tables exist
+    await new Promise<void>((resolve, reject) => {
+      this.db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS item_embeddings USING vec0(embedding float[${dim}])`, (err)=> err?reject(err):resolve());
+    });
+    await new Promise<void>((resolve, reject) => {
+      this.db.run(`CREATE TABLE IF NOT EXISTS item_embedding_meta (rowid INTEGER PRIMARY KEY, id TEXT NOT NULL, type TEXT NOT NULL)`, (err)=> err?reject(err):resolve());
+    });
+
+    // Upsert: check existing mapping
+    const existing: any = await new Promise((resolve, reject) => {
+      this.db.get('SELECT rowid FROM item_embedding_meta WHERE id = ? AND type = ? LIMIT 1', [itemId, itemType], (err, row) => (err ? reject(err) : resolve(row)));
+    });
+
+    const blob = Buffer.from(new Float32Array(embedding).buffer);
+    if (existing && existing.rowid) {
+      await new Promise<void>((resolve, reject) => {
+        this.db.run('UPDATE item_embeddings SET embedding = vector_to_blob(?) WHERE rowid = ?', [blob, existing.rowid], (err)=> err?reject(err):resolve());
+      });
+    } else {
+      const rowid = await new Promise<number>((resolve, reject) => {
+        this.db.run('INSERT INTO item_embeddings(embedding) VALUES (vector_to_blob(?))', [blob], function (err) {
+          if (err) return reject(err);
+          resolve((this as any).lastID as number);
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        this.db.run('INSERT INTO item_embedding_meta(rowid, id, type) VALUES (?,?,?)', [rowid, itemId, itemType], (err)=> err?reject(err):resolve());
+      });
+    }
+
+    return `Embedding set for ${itemId} (${itemType}) using model ${embeddingModel || 'unspecified'} (dim=${dim})`;
   }
 }
 
