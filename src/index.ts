@@ -454,7 +454,7 @@ class ProjectManagementServer {
                 embedding: {
                   type: 'array',
                   items: { type: 'number' },
-                  description: 'Optional vector embedding supplied by client for semantic search'
+                  description: 'Optional vector embedding supplied by client for semantic search (length must equal server vecDim)'
                 },
                 embeddingModel: { type: 'string', description: 'Model name for the supplied embedding' },
                 embeddingDim: { type: 'number', description: 'Embedding dimension (must match server vec dim)' },
@@ -926,13 +926,41 @@ class ProjectManagementServer {
   private async maybeAttachEmbedding(createResponse: string, type: 'bug'|'feature'|'improvement', args: any): Promise<void> {
     try {
       const { embedding, embeddingModel, embeddingDim } = args || {};
-      if (!embedding || !Array.isArray(embedding) || embedding.length === 0) return;
       const itemId = this.extractIdFromCreateResponse(createResponse, type);
       if (!itemId) return;
-      await this.setItemEmbedding({ itemId, type, embedding, embeddingModel, embeddingDim });
+
+      if (embedding && Array.isArray(embedding) && embedding.length > 0) {
+        await this.setItemEmbedding({ itemId, type, embedding, embeddingModel, embeddingDim });
+        return;
+      }
+
+      // Optional automatic fallback generation if enabled
+      const doAuto = String(process.env.AUTO_EMBED_FALLBACK || '').toLowerCase() === '1' || String(process.env.VEC_SOURCE || 'client').toLowerCase() === 'auto';
+      if (doAuto) {
+        const dim = this.getVectorDim();
+        const text = [args?.title, args?.description, args?.currentState, args?.desiredState, args?.expectedBehavior, args?.actualBehavior]
+          .filter(Boolean)
+          .join(' ');
+        const autoEmbedding = this.generateDeterministicEmbedding(text, dim);
+        await this.setItemEmbedding({ itemId, type, embedding: autoEmbedding, embeddingModel: 'auto-deterministic', embeddingDim: dim });
+      }
     } catch {
       // Non-fatal: ignore embedding attach failures
     }
+  }
+
+  private generateDeterministicEmbedding(text: string, dim: number): number[] {
+    const vec = new Array<number>(dim).fill(0);
+    const normText = (text || '').toLowerCase();
+    for (let i = 0; i < normText.length; i++) {
+      const code = normText.charCodeAt(i);
+      const idx = (code + i * 13) % dim;
+      vec[idx] += ((code % 31) + 1) / 31;
+    }
+    let sum = 0;
+    for (const v of vec) sum += v * v;
+    const denom = Math.sqrt(sum) || 1;
+    return vec.map((v) => v / denom);
   }
 
   private getVectorDim(): number {
@@ -940,7 +968,7 @@ class ProjectManagementServer {
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : 128;
   }
 
-  private async getSearchCapabilities(): Promise<{ ftsEnabled: boolean; vecEnabled: boolean; vecDim: number; vecSource: string }>
+  private async getSearchCapabilities(): Promise<{ ftsEnabled: boolean; vecEnabled: boolean; vecDim: number; vecSource: string; autoEmbedFallback: boolean }>
   {
     // Probe FTS via ensure call in SearchManager
     const ftsEnabled = await (async () => {
@@ -955,7 +983,8 @@ class ProjectManagementServer {
       } catch { return false; }
     })();
     const vecSource = String(process.env.VEC_SOURCE || 'client').toLowerCase();
-    return { ftsEnabled, vecEnabled, vecDim: this.getVectorDim(), vecSource };
+    const autoEmbedFallback = String(process.env.AUTO_EMBED_FALLBACK || '').toLowerCase() === '1';
+    return { ftsEnabled, vecEnabled, vecDim: this.getVectorDim(), vecSource, autoEmbedFallback };
   }
 
   private async setItemEmbedding(args: any): Promise<string> {
