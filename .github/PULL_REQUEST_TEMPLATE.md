@@ -1,20 +1,18 @@
----
-name: "🚀 Feature Request"
-about: Suggest an idea for this project
-title: ''
-labels: ''
-assignees: ''
+## Summary
+Brief description of what this PR does
 
----
+## Changes
+- [ ] Feature/Enhancement
+- [ ] Bug Fix
+- [ ] Documentation
+- [ ] Refactoring
+- [ ] Test Coverage
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+## Description
+What changes are being made and why?
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+## Testing
+How has this been tested?
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
-
-**Additional context**
-Add any other context or screenshots about the feature request here.
+## Related Issues
+Closes #(issue number)
