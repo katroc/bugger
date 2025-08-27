@@ -13,6 +13,7 @@ export class SearchManager {
   private featureManager: FeatureManager;
   private improvementManager: ImprovementManager;
   private ftsReady?: boolean;
+  private vecReady?: boolean;
 
   constructor() {
     this.tokenTracker = TokenUsageTracker.getInstance();
@@ -45,32 +46,70 @@ export class SearchManager {
    */
   public async rebuildIndex(db: sqlite3.Database): Promise<string> {
     this.tokenTracker.startOperation('rebuild_search_index');
-    const ok = await this.ensureFts(db);
-    if (!ok) {
-      throw new Error('FTS5 is not available in this SQLite build');
+    // Rebuild FTS if available
+    const ftsOk = await this.ensureFts(db);
+    if (ftsOk) {
+      log.info('Rebuilding search index (FTS5)');
+      await new Promise<void>((resolve, reject) => db.run('DELETE FROM item_fts', (e)=> e?reject(e):resolve()));
+      await new Promise<void>((resolve, reject) => db.run(
+        `INSERT INTO item_fts (id, type, title, description)
+         SELECT id, 'bug', title, description FROM bugs`,
+        (e)=> e?reject(e):resolve()
+      ));
+      await new Promise<void>((resolve, reject) => db.run(
+        `INSERT INTO item_fts (id, type, title, description)
+         SELECT id, 'feature', title, description FROM feature_requests`,
+        (e)=> e?reject(e):resolve()
+      ));
+      await new Promise<void>((resolve, reject) => db.run(
+        `INSERT INTO item_fts (id, type, title, description)
+         SELECT id, 'improvement', title, description FROM improvements`,
+        (e)=> e?reject(e):resolve()
+      ));
     }
-    log.info('Rebuilding search index (FTS5)');
-    // Clear
-    await new Promise<void>((resolve, reject) => db.run('DELETE FROM item_fts', (e)=> e?reject(e):resolve()));
-    // Insert bugs
-    await new Promise<void>((resolve, reject) => db.run(
-      `INSERT INTO item_fts (id, type, title, description)
-       SELECT id, 'bug', title, description FROM bugs`,
-      (e)=> e?reject(e):resolve()
-    ));
-    // Insert features
-    await new Promise<void>((resolve, reject) => db.run(
-      `INSERT INTO item_fts (id, type, title, description)
-       SELECT id, 'feature', title, description FROM feature_requests`,
-      (e)=> e?reject(e):resolve()
-    ));
-    // Insert improvements
-    await new Promise<void>((resolve, reject) => db.run(
-      `INSERT INTO item_fts (id, type, title, description)
-       SELECT id, 'improvement', title, description FROM improvements`,
-      (e)=> e?reject(e):resolve()
-    ));
-    const msg = 'Search index rebuilt';
+
+    // Rebuild vector index if sqlite-vec present
+    const vecOk = await this.ensureVec(db);
+    if (vecOk) {
+      log.info('Rebuilding vector index (sqlite-vec)');
+      await new Promise<void>((resolve, reject) => db.run('DELETE FROM item_embeddings', (e)=> e?reject(e):resolve()));
+      await new Promise<void>((resolve, reject) => db.run('DELETE FROM item_embedding_meta', (e)=> e?reject(e):resolve()));
+
+      // Helper to insert items
+      const embedAll = async (sql: string, type: string) => {
+        const rows: any[] = await new Promise((resolve, reject) => {
+          db.all(sql, (err, rows) => (err ? reject(err) : resolve(rows || [])));
+        });
+        for (const row of rows) {
+          const text = `${row.title || ''} ${row.description || ''}`.trim();
+          const embedding = this.fakeEmbed(text); // Deterministic local embedding
+          await new Promise<void>((resolve, reject) => {
+            db.run(
+              'INSERT INTO item_embeddings(embedding) VALUES (vector_to_blob(?))',
+              [Buffer.from(new Float32Array(embedding).buffer)],
+              function (err) {
+                if (err) return reject(err);
+                const rid = (this as any).lastID;
+                db.run(
+                  'INSERT INTO item_embedding_meta(rowid, id, type) VALUES (?,?,?)',
+                  [rid, row.id, type],
+                  (e) => (e ? reject(e) : resolve())
+                );
+              }
+            );
+          });
+        }
+      };
+
+      await embedAll('SELECT id, title, description FROM bugs', 'bug');
+      await embedAll('SELECT id, title, description FROM feature_requests', 'feature');
+      await embedAll('SELECT id, title, description FROM improvements', 'improvement');
+    }
+
+    const parts: string[] = [];
+    if (ftsOk) parts.push('FTS');
+    if (vecOk) parts.push('Vectors');
+    const msg = parts.length ? `Search index rebuilt (${parts.join(' + ')})` : 'No index features available';
     const usage = this.tokenTracker.recordUsage('', msg, 'rebuild_search_index');
     return `${msg}\n\nToken usage: ${usage.total} tokens (${usage.input} input, ${usage.output} output)`;
   }
@@ -89,6 +128,30 @@ export class SearchManager {
     const results: any[] = [];
 
     try {
+      // Try vector search first if available
+      if (await this.ensureVec(db)) {
+        const qvec = this.fakeEmbed(query);
+        const rows: any[] = await new Promise((resolve, reject) => {
+          db.all(
+            `SELECT m.id, m.type, distance
+             FROM item_embeddings e
+             JOIN item_embedding_meta m ON m.rowid = e.rowid
+             WHERE e.embedding MATCH vector_to_blob(?)
+             ORDER BY distance ASC
+             LIMIT ?`,
+            [Buffer.from(new Float32Array(qvec).buffer), limit],
+            (err, rows) => (err ? reject(err) : resolve(rows || []))
+          );
+        });
+        for (const row of rows) {
+          const item = await this.fetchItemById(db, row.type, row.id);
+          if (item) {
+            const similarity = 1 / (1 + Number(row.distance || 0));
+            results.push({ ...item, type: row.type, similarity });
+          }
+        }
+      }
+
       // Try FTS5 first
       if (await this.ensureFts(db)) {
         const rows: any[] = await new Promise((resolve, reject) => {
@@ -146,6 +209,55 @@ export class SearchManager {
     } catch (error) {
       throw new Error(`Semantic search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  /**
+   * Ensure sqlite-vec vector table exists. Returns true if ready.
+   */
+  private async ensureVec(db: sqlite3.Database): Promise<boolean> {
+    if (this.vecReady !== undefined) return this.vecReady;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        db.run(
+          `CREATE VIRTUAL TABLE IF NOT EXISTS item_embeddings USING vec0(embedding float[128])`,
+          (err) => (err ? reject(err) : resolve())
+        );
+      });
+      await new Promise<void>((resolve, reject) => {
+        db.run(
+          `CREATE TABLE IF NOT EXISTS item_embedding_meta (
+             rowid INTEGER PRIMARY KEY,
+             id TEXT NOT NULL,
+             type TEXT NOT NULL
+           )`,
+          (err) => (err ? reject(err) : resolve())
+        );
+      });
+      this.vecReady = true;
+    } catch {
+      this.vecReady = false;
+    }
+    return this.vecReady;
+  }
+
+  /**
+   * Deterministic, local-only embedding generator (placeholder).
+   * Produces a 128-dim vector from input text without network calls.
+   */
+  private fakeEmbed(text: string): number[] {
+    const dim = 128;
+    const vec = new Array<number>(dim).fill(0);
+    const normText = (text || '').toLowerCase();
+    for (let i = 0; i < normText.length; i++) {
+      const code = normText.charCodeAt(i);
+      const idx = (code + i * 13) % dim;
+      vec[idx] += ((code % 31) + 1) / 31;
+    }
+    // L2 normalize
+    let sum = 0;
+    for (const v of vec) sum += v * v;
+    const denom = Math.sqrt(sum) || 1;
+    return vec.map((v) => v / denom);
   }
 
   /**

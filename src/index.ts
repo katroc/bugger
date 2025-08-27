@@ -178,6 +178,36 @@ class ProjectManagementServer {
       });
     }
 
+    // Best-effort: load sqlite-vec and prepare vector tables
+    try {
+      // Dynamically import to avoid hard failure if not installed
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const vec = await import('sqlite-vec');
+      if (vec && typeof (vec as any).load === 'function') {
+        await (vec as any).load(this.db);
+        log.info('sqlite-vec extension loaded');
+        // Create vector table (128 dims by default) and metadata mapping
+        await new Promise<void>((resolve, reject) => {
+          this.db.run(
+            `CREATE VIRTUAL TABLE IF NOT EXISTS item_embeddings USING vec0(embedding float[128])`,
+            (err) => (err ? reject(err) : resolve())
+          );
+        });
+        await new Promise<void>((resolve, reject) => {
+          this.db.run(
+            `CREATE TABLE IF NOT EXISTS item_embedding_meta (
+               rowid INTEGER PRIMARY KEY,
+               id TEXT NOT NULL,
+               type TEXT NOT NULL
+             )`,
+            (err) => (err ? reject(err) : resolve())
+          );
+        });
+      }
+    } catch (e: any) {
+      log.debug('sqlite-vec not available; vector search disabled:', e?.message || e);
+    }
+
     // Helpful indexes for common filters and sorts
     const indexes = [
       // bugs
