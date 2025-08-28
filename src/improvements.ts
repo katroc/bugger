@@ -35,6 +35,95 @@ export class ImprovementManager {
   }
 
   /**
+   * Map simple TODO statuses to improvement statuses
+   */
+  private mapTodoStatus(status: string): Improvement['status'] | null {
+    const s = String(status || '').toLowerCase();
+    switch (s) {
+      case 'todo':
+        return 'Proposed';
+      case 'doing':
+        return 'In Development';
+      case 'blocked':
+        return 'In Discussion';
+      case 'done':
+        return 'Completed';
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Quick-create a TODO (lightweight improvement)
+   */
+  async createTodo(db: sqlite3.Database, args: any): Promise<string> {
+    this.tokenTracker.startOperation('create_todo');
+
+    const title: string = args.title as string;
+    const description: string = args.description || '';
+    if (!title) {
+      throw new Error('title is required for TODOs');
+    }
+
+    const improvement: Improvement = {
+      id: args.improvementId || await this.generateNextIdWithRetry(db, 'improvement'),
+      status: (this.mapTodoStatus(args.status) || 'Proposed') as Improvement['status'],
+      priority: args.priority || 'Medium',
+      dateRequested: new Date().toISOString().split('T')[0],
+      category: args.category || 'TODO',
+      requestedBy: args.requestedBy,
+      title,
+      description,
+      // Derive lightweight fields to satisfy schema without burdening user
+      currentState: description || 'n/a',
+      desiredState: title || 'n/a',
+      acceptanceCriteria: [],
+      filesLikelyInvolved: args.filesLikelyInvolved || [],
+      dependencies: [],
+      benefits: []
+    };
+
+    return new Promise((resolve, reject) => {
+      const insertQuery = `
+        INSERT INTO improvements (
+          id, status, priority, dateRequested, category, requestedBy, title, description,
+          currentState, desiredState, acceptanceCriteria, implementationDetails,
+          potentialImplementation, filesLikelyInvolved, dependencies, effortEstimate, benefits
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+
+      db.run(insertQuery, [
+        improvement.id,
+        improvement.status,
+        improvement.priority,
+        improvement.dateRequested,
+        improvement.category,
+        improvement.requestedBy,
+        improvement.title,
+        improvement.description,
+        improvement.currentState,
+        improvement.desiredState,
+        JSON.stringify(improvement.acceptanceCriteria),
+        improvement.implementationDetails,
+        improvement.potentialImplementation,
+        JSON.stringify(improvement.filesLikelyInvolved),
+        JSON.stringify(improvement.dependencies),
+        improvement.effortEstimate,
+        JSON.stringify(improvement.benefits)
+      ], async (err) => {
+        if (err) {
+          reject(new Error(`Failed to create TODO: ${err.message}`));
+        } else {
+          const inputText = JSON.stringify(args);
+          const outputText = `Improvement ${improvement.id} created successfully.`;
+          const tokenUsage = this.tokenTracker.recordUsage(inputText, outputText, 'create_todo');
+          resolve(`${outputText}${formatTokenUsage(tokenUsage)}`);
+        }
+      });
+    });
+  }
+
+  /**
    * Create a new improvement
    */
   async createImprovement(db: sqlite3.Database, args: any): Promise<string> {
@@ -133,9 +222,48 @@ export class ImprovementManager {
     const params: any[] = [];
     const conditions: string[] = [];
 
+    // Support TODO-centric views
+    const view: string | undefined = args.view;
+    if (view) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      switch (String(view)) {
+        case 'todos': {
+          // Open-like states (mapped from TODO semantics)
+          const openStatuses = ['Proposed', 'In Development', 'In Discussion'];
+          conditions.push(`status IN (${openStatuses.map(() => '?').join(', ')})`);
+          params.push(...openStatuses);
+          break;
+        }
+        case 'blocked': {
+          conditions.push('status = ?');
+          params.push('In Discussion');
+          break;
+        }
+        case 'done': {
+          conditions.push('status = ?');
+          params.push('Completed');
+          break;
+        }
+        case 'today': {
+          conditions.push('dateRequested = ?');
+          params.push(todayStr);
+          break;
+        }
+      }
+    }
+
+    // Allow status filter as string or array; map TODO labels if provided
     if (args.status) {
-      conditions.push('status = ?');
-      params.push(args.status);
+      const toImprovementStatus = (s: string) => this.mapTodoStatus(s) || s;
+      if (Array.isArray(args.status)) {
+        const statuses = args.status.map((s: string) => toImprovementStatus(s));
+        conditions.push(`status IN (${statuses.map(() => '?').join(', ')})`);
+        params.push(...statuses);
+      } else {
+        const status = toImprovementStatus(args.status);
+        conditions.push('status = ?');
+        params.push(status);
+      }
     }
 
     if (args.priority) {
@@ -207,9 +335,13 @@ export class ImprovementManager {
   async updateImprovementStatus(db: sqlite3.Database, args: any): Promise<string> {
     this.tokenTracker.startOperation('update_improvement_status');
     
-    const { itemId, status, dateCompleted } = args;
+    const { itemId } = args;
+    let { status, dateCompleted } = args;
 
     const validStatuses = ['Proposed', 'In Discussion', 'Approved', 'In Development', 'Completed (Awaiting Human Verification)', 'Completed', 'Rejected'];
+    // Allow lightweight TODO statuses by mapping them first
+    const mapped = this.mapTodoStatus(status);
+    if (mapped) status = mapped;
     if (!validStatuses.includes(status)) {
       throw new Error(`Invalid status: ${status}. Must be one of: ${validStatuses.join(', ')}`);
     }

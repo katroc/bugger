@@ -2,7 +2,6 @@
 import { formatSearchResults, formatStatistics } from './format.js';
 import { TokenUsageTracker } from './token-usage-tracker.js';
 import { BugManager } from './bugs.js';
-import { FeatureManager } from './features.js';
 import { ImprovementManager } from './improvements.js';
 import sqlite3 from 'sqlite3';
 import { log } from './logger.js';
@@ -10,14 +9,13 @@ import { log } from './logger.js';
 export class SearchManager {
   private tokenTracker: TokenUsageTracker;
   private bugManager: BugManager;
-  private featureManager: FeatureManager;
+  // FeatureManager removed
   private improvementManager: ImprovementManager;
   private ftsReady?: boolean;
 
   constructor() {
     this.tokenTracker = TokenUsageTracker.getInstance();
     this.bugManager = new BugManager();
-    this.featureManager = new FeatureManager();
     this.improvementManager = new ImprovementManager();
   }
 
@@ -58,12 +56,7 @@ export class SearchManager {
        SELECT id, 'bug', title, description FROM bugs`,
       (e)=> e?reject(e):resolve()
     ));
-    // Insert features
-    await new Promise<void>((resolve, reject) => db.run(
-      `INSERT INTO item_fts (id, type, title, description)
-       SELECT id, 'feature', title, description FROM feature_requests`,
-      (e)=> e?reject(e):resolve()
-    ));
+    // Features removed
     // Insert improvements
     await new Promise<void>((resolve, reject) => db.run(
       `INSERT INTO item_fts (id, type, title, description)
@@ -116,13 +109,7 @@ export class SearchManager {
             results.push({ ...bug, type: 'bug', similarity });
           }
         }
-        const features = await this.searchAllFeatures(db, query);
-        for (const feature of features) {
-          const similarity = this.calculateSimilarity(query, `${feature.title} ${feature.description}`);
-          if (similarity >= minSimilarity) {
-            results.push({ ...feature, type: 'feature', similarity });
-          }
-        }
+        // Features removed
         const improvements = await this.searchAllImprovements(db, query);
         for (const improvement of improvements) {
           const similarity = this.calculateSimilarity(query, `${improvement.title} ${improvement.description}`);
@@ -163,10 +150,7 @@ export class SearchManager {
         results.push(...bugs);
       }
 
-      if (type === 'features' || type === 'all') {
-        const features = await this.featureManager.searchFeatures(db, query, args);
-        results.push(...features);
-      }
+      // Features removed
 
       if (type === 'improvements' || type === 'all') {
         const improvements = await this.improvementManager.searchImprovements(db, query, args);
@@ -230,9 +214,7 @@ export class SearchManager {
         stats.bugs = await this.getBugStatistics(db);
       }
 
-      if (type === 'features' || type === 'all') {
-        stats.features = await this.getFeatureStatistics(db);
-      }
+      // Features removed
 
       if (type === 'improvements' || type === 'all') {
         stats.improvements = await this.getImprovementStatistics(db);
@@ -290,7 +272,6 @@ export class SearchManager {
   private async fetchItemById(db: sqlite3.Database, type: string, id: string): Promise<any | null> {
     const queryMap: Record<string, string> = {
       bug: 'SELECT * FROM bugs WHERE id = ? LIMIT 1',
-      feature: 'SELECT * FROM feature_requests WHERE id = ? LIMIT 1',
       improvement: 'SELECT * FROM improvements WHERE id = ? LIMIT 1',
     };
     const sql = queryMap[type];
@@ -306,12 +287,6 @@ export class SearchManager {
             stepsToReproduce: JSON.parse(row.stepsToReproduce || '[]'),
             verification: JSON.parse(row.verification || '[]'),
             humanVerified: row.humanVerified === 1
-          });
-        } else if (type === 'feature') {
-          resolve({
-            ...row,
-            acceptanceCriteria: JSON.parse(row.acceptanceCriteria || '[]'),
-            dependencies: JSON.parse(row.dependencies || '[]')
           });
         } else {
           resolve({
@@ -351,22 +326,7 @@ export class SearchManager {
   /**
    * Search all features (helper method)
    */
-  private async searchAllFeatures(db: sqlite3.Database, query: string): Promise<any[]> {
-    return new Promise((resolve, reject) => {
-      db.all('SELECT * FROM feature_requests', [], (err, rows: any[]) => {
-        if (err) {
-          reject(new Error(`Failed to search features: ${err.message}`));
-        } else {
-          const features = rows.map(row => ({
-            ...row,
-            acceptanceCriteria: JSON.parse(row.acceptanceCriteria || '[]'),
-            dependencies: JSON.parse(row.dependencies || '[]')
-          }));
-          resolve(features);
-        }
-      });
-    });
-  }
+  // Features removed
 
   /**
    * Search all improvements (helper method)
@@ -426,35 +386,7 @@ export class SearchManager {
   /**
    * Get feature statistics
    */
-  private async getFeatureStatistics(db: sqlite3.Database): Promise<any> {
-    return new Promise((resolve, reject) => {
-      db.all(`
-        SELECT 
-          COUNT(*) as total,
-          status,
-          priority,
-          COUNT(*) as count
-        FROM feature_requests 
-        GROUP BY status, priority
-      `, [], (err, rows: any[]) => {
-        if (err) {
-          reject(new Error(`Failed to get feature statistics: ${err.message}`));
-        } else {
-          const byStatus: any = {};
-          const byPriority: any = {};
-          let total = 0;
-
-          for (const row of rows) {
-            byStatus[row.status] = (byStatus[row.status] || 0) + row.count;
-            byPriority[row.priority] = (byPriority[row.priority] || 0) + row.count;
-            total += row.count;
-          }
-
-          resolve({ total, byStatus, byPriority });
-        }
-      });
-    });
-  }
+  // Features removed
 
   /**
    * Get improvement statistics

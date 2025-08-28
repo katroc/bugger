@@ -31,23 +31,7 @@ async function setupSchema(db: sqlite3.Database) {
     verification TEXT,
     humanVerified INTEGER DEFAULT 0
   )`);
-  await run(db, `CREATE TABLE IF NOT EXISTS feature_requests (
-    id TEXT PRIMARY KEY,
-    status TEXT NOT NULL,
-    priority TEXT NOT NULL,
-    dateRequested TEXT NOT NULL,
-    category TEXT NOT NULL,
-    requestedBy TEXT,
-    title TEXT NOT NULL,
-    description TEXT NOT NULL,
-    userStory TEXT NOT NULL,
-    currentBehavior TEXT NOT NULL,
-    expectedBehavior TEXT NOT NULL,
-    acceptanceCriteria TEXT,
-    potentialImplementation TEXT,
-    dependencies TEXT,
-    effortEstimate TEXT
-  )`);
+  // features removed
   await run(db, `CREATE TABLE IF NOT EXISTS improvements (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
@@ -75,9 +59,7 @@ async function seed(db: sqlite3.Database) {
     'Bug #010', 'Open', 'High', '2025-06-01', 'Auth', 'Authentication bug', 'Login fails with special chars', 'should login', 'does not', null,
     JSON.stringify([]), JSON.stringify([]), JSON.stringify([]), 0
   ]);
-  await run(db, `INSERT INTO feature_requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
-    'FR-010', 'Proposed', 'Medium', '2025-06-02', 'UI', 'alice', 'Dark mode feature', 'Add dark theme', 'As a user...', 'current', 'expected', JSON.stringify([]), null, JSON.stringify([]), 'Small'
-  ]);
+  // features removed
 }
 
 async function main() {
@@ -120,4 +102,3 @@ async function main() {
 }
 
 main();
-
