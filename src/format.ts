@@ -211,23 +211,7 @@ interface Bug {
     humanVerified?: boolean;
   }
   
-  interface FeatureRequest {
-    id: string;
-    status: 'Proposed' | 'In Discussion' | 'Approved' | 'In Development' | 'Research Phase' | 'Partially Implemented' | 'Completed' | 'Rejected';
-    priority: 'Low' | 'Medium' | 'High' | 'Critical';
-    dateRequested: string;
-    category: string;
-    requestedBy?: string;
-    title: string;
-    description: string;
-    userStory: string;
-    currentBehavior: string;
-    expectedBehavior: string;
-    acceptanceCriteria: string[];
-    potentialImplementation?: string;
-    dependencies?: string[];
-    effortEstimate?: 'Small' | 'Medium' | 'Large' | 'XL';
-  }
+  // FeatureRequest removed
   
   interface Improvement {
     id: string;
@@ -263,18 +247,7 @@ interface Bug {
     return formatTable(bugs, columns);
   }
   
-  export function formatFeatureRequests(features: FeatureRequest[]): string {
-    const columns: TableColumn[] = [
-      { key: 'id', header: 'ID', width: 8 },
-      { key: 'status', header: 'Status', formatter: getStatusFormatter() },
-      { key: 'priority', header: 'Priority', formatter: getPriorityFormatter() },
-      { key: 'category', header: 'Category' },
-      { key: 'dateRequested', header: 'Date', width: 10 },
-      { key: 'title', header: 'Title' }
-    ];
-    
-    return formatTable(features, columns);
-  }
+  // formatFeatureRequests removed
   
   export function formatImprovements(improvements: Improvement[]): string {
     const columns: TableColumn[] = [
@@ -345,8 +318,7 @@ interface Bug {
       switch (item.type) {
         case 'bug':
           return formatBugs([item]);
-        case 'feature':
-          return formatFeatureRequests([item]);
+        // case 'feature': removed
         case 'improvement':
           return formatImprovements([item]);
         default:
@@ -357,7 +329,7 @@ interface Bug {
     return output + formattedResults;
   }
   
-  export function formatBulkUpdateResults(results: any[], type: 'bugs' | 'features' | 'improvements'): string {
+export function formatBulkUpdateResults(results: any[], type: 'bugs' | 'improvements'): string {
     const successCount = results.filter(r => r.status === 'success').length;
     const errorCount = results.filter(r => r.status === 'error').length;
     
@@ -404,11 +376,7 @@ interface Bug {
       output += '\n';
     }
   
-    if (stats.features) {
-      output += `Feature Requests (${stats.features.total} total)\n`;
-      output += formatStatusAndPriority(stats.features);
-      output += '\n';
-    }
+    // Features removed
   
     if (stats.improvements) {
       output += `Improvements (${stats.improvements.total} total)\n`;

@@ -5,7 +5,7 @@ import { StackTraceParser, ParsedStackTrace, StackTraceContext } from './stack-t
 import * as fs from 'fs';
 import * as path from 'path';
 
-export type TaskType = 'bug' | 'feature' | 'improvement';
+export type TaskType = 'bug' | 'improvement';
 
 export interface CodeContext {
   id: string;
@@ -53,7 +53,6 @@ export interface ContextCollectionConfig {
   compressionThreshold: number;
   taskTypeTokenLimits: {
     bug: number;
-    feature: number;
     improvement: number;
   };
   contextScoringWeights: {
@@ -844,7 +843,6 @@ export class ContextCollectionEngine {
     // Simple intent matching based on context type and task type
     const taskTypeMatches: Record<string, string[]> = {
       'bug': ['function', 'usage', 'comment'],
-      'feature': ['class', 'function', 'import'],
       'improvement': ['function', 'class', 'usage']
     };
     
@@ -1067,7 +1065,6 @@ export class ContextCollectionEngine {
       compressionThreshold: 500,
       taskTypeTokenLimits: {
         bug: 1500,
-        feature: 2500,
         improvement: 2000,
       },
       contextScoringWeights: {

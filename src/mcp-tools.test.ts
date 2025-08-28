@@ -1,6 +1,5 @@
 import sqlite3 from 'sqlite3';
 import { BugManager } from './bugs.js';
-import { FeatureManager } from './features.js';
 import { ImprovementManager } from './improvements.js';
 import { SearchManager } from './search.js';
 import { WorkflowManager } from './workflows.js';
@@ -36,23 +35,7 @@ async function setupSchema(db: sqlite3.Database) {
     humanVerified INTEGER DEFAULT 0
   )`);
 
-  await run(db, `CREATE TABLE feature_requests (
-    id TEXT PRIMARY KEY,
-    status TEXT NOT NULL,
-    priority TEXT NOT NULL,
-    dateRequested TEXT NOT NULL,
-    category TEXT NOT NULL,
-    requestedBy TEXT,
-    title TEXT NOT NULL,
-    description TEXT NOT NULL,
-    userStory TEXT NOT NULL,
-    currentBehavior TEXT NOT NULL,
-    expectedBehavior TEXT NOT NULL,
-    acceptanceCriteria TEXT,
-    potentialImplementation TEXT,
-    dependencies TEXT,
-    effortEstimate TEXT
-  )`);
+  // features removed
 
   await run(db, `CREATE TABLE improvements (
     id TEXT PRIMARY KEY,
@@ -106,7 +89,7 @@ async function setupSchema(db: sqlite3.Database) {
 async function main() {
   const db = new sqlite3.Database(':memory:');
   const bugs = new BugManager();
-  const feats = new FeatureManager();
+  // features removed
   const imps = new ImprovementManager();
   const search = new SearchManager();
   const flows = new WorkflowManager();
@@ -127,19 +110,7 @@ async function main() {
     });
     assert(/Bug #\d+/.test(bugCreateOut), 'create_bug returns created Bug ID');
 
-    // create_item (feature)
-    const featCreateOut = await feats.createFeatureRequest(db, {
-      title: 'Add Dark Mode',
-      description: 'Provide dark theme',
-      priority: 'Medium',
-      category: 'UI',
-      requestedBy: 'alice',
-      userStory: 'As a user I want dark mode',
-      currentBehavior: 'Light only',
-      expectedBehavior: 'Toggle dark mode',
-      acceptanceCriteria: ['Toggle exists', 'Persists preference']
-    });
-    assert(/FR-\d+/.test(featCreateOut), 'create_feature_request returns created FR ID');
+    // features removed
 
     // create_item (improvement) using aliases to ensure no NOT NULL issues
     const impCreateOut = await imps.createImprovement(db, {
@@ -157,21 +128,18 @@ async function main() {
     // list_items
     const listBugs = await bugs.listBugs(db, {});
     assert(listBugs.includes('Bug #'), 'list_bugs returns content');
-    const listFeats = await feats.listFeatureRequests(db, {});
-    assert(listFeats.includes('FR-'), 'list_features returns content');
+    // features removed
     const listImps = await imps.listImprovements(db, {});
     assert(listImps.includes('IMP-'), 'list_improvements returns content');
 
     // update_item_status
     const bugId = (listBugs.match(/Bug #\d+/) || [''])[0];
-    const frId = (listFeats.match(/FR-\d+/) || [''])[0];
     const impId = (listImps.match(/IMP-\d+/) || [''])[0];
-    assert(bugId && frId && impId, 'extracted IDs for status updates');
+    assert(bugId && impId, 'extracted IDs for status updates');
 
     const bugUpd = await bugs.updateBugStatus(db, { itemId: bugId, status: 'Fixed', humanVerified: true });
     assert(bugUpd.includes('updated to Fixed'), 'bug status updated');
-    const frUpd = await feats.updateFeatureStatus(db, { itemId: frId, status: 'Completed' });
-    assert(frUpd.includes('updated to Completed'), 'feature status updated');
+    // features removed
     const impUpd = await imps.updateImprovementStatus(db, { itemId: impId, status: 'Approved', dateCompleted: '2025-06-10' });
     assert(impUpd.includes('updated to Approved'), 'improvement status updated');
 
@@ -179,22 +147,18 @@ async function main() {
     const searchOut = await search.searchItems(db, { type: 'all', sortBy: 'date', sortOrder: 'asc', limit: 10, offset: 0 });
     assert(typeof searchOut === 'string' && searchOut.includes('Bug #'), 'search_items returns formatted string');
     const statsOut = await search.getStatistics(db, { type: 'all' });
-    assert(
-      statsOut.includes('Bugs (') && statsOut.includes('Feature Requests (') && statsOut.includes('Improvements ('),
-      'get_statistics returns counts'
-    );
+    assert(statsOut.includes('Bugs (') && statsOut.includes('Improvements ('), 'get_statistics returns counts');
 
     // link_items and get_related_items
-    const linkOut = await flows.linkItems(db, { fromItem: bugId, toItem: frId, relationshipType: 'relates_to' });
+    const linkOut = await flows.linkItems(db, { fromItem: bugId, toItem: impId, relationshipType: 'relates_to' });
     assert(linkOut.includes('Relationship created'), 'link_items creates relationship');
     const relatedOut = await flows.getRelatedItems(db, { itemId: bugId });
-    assert(relatedOut.includes(frId), 'get_related_items lists linked item');
+    assert(relatedOut.includes(impId), 'get_related_items lists linked item');
 
     // bulk_update_items (exercise underlying bulk methods per type)
     const bulkBugs = await bugs.bulkUpdateBugStatus(db, { updates: [{ itemId: bugId, status: 'Closed', humanVerified: true }] });
     assert(bulkBugs.includes('bugs updated successfully') && bulkBugs.includes('Closed'), 'bulk update bugs works');
-    const bulkFeats = await feats.bulkUpdateFeatureStatus(db, { updates: [{ itemId: frId, status: 'Completed' }] });
-    assert(bulkFeats.includes('features updated successfully') && bulkFeats.includes('Completed'), 'bulk update features works');
+    // features removed
     const bulkImps = await imps.bulkUpdateImprovementStatus(db, { updates: [{ itemId: impId, status: 'In Development' }] });
     assert(bulkImps.includes('improvements updated successfully') && bulkImps.includes('In Development'), 'bulk update improvements works');
 

@@ -16,7 +16,6 @@ export class ContextManager {
       enableContentDeduplication: true,
       taskTypeTokenLimits: {
         bug: 1500,
-        feature: 2500,
         improvement: 2000,
       }
     });

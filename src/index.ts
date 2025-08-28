@@ -9,11 +9,12 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { BugManager } from './bugs.js';
-import { FeatureManager } from './features.js';
+// Feature requests removed
 import { ImprovementManager } from './improvements.js';
 import { SearchManager } from './search.js';
 import { ContextManager } from './context.js';
 import { WorkflowManager } from './workflows.js';
+import { validateCreateItem, validateUpdateItemStatus } from './validation.js';
 import sqlite3 from 'sqlite3';
 import { log } from './logger.js';
 
@@ -21,7 +22,7 @@ class ProjectManagementServer {
   private server: Server;
   private db!: sqlite3.Database;
   private bugManager: BugManager;
-  private featureManager: FeatureManager;
+  // FeatureManager removed
   private improvementManager: ImprovementManager;
   private searchManager: SearchManager;
   private contextManager: ContextManager;
@@ -40,7 +41,6 @@ class ProjectManagementServer {
     );
 
     this.bugManager = new BugManager();
-    this.featureManager = new FeatureManager();
     this.improvementManager = new ImprovementManager();
     this.searchManager = new SearchManager();
     this.contextManager = new ContextManager();
@@ -93,23 +93,7 @@ class ProjectManagementServer {
         verification TEXT,
         humanVerified INTEGER DEFAULT 0
       )`,
-      `CREATE TABLE IF NOT EXISTS feature_requests (
-        id TEXT PRIMARY KEY,
-        status TEXT NOT NULL,
-        priority TEXT NOT NULL,
-        dateRequested TEXT NOT NULL,
-        category TEXT NOT NULL,
-        requestedBy TEXT,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL,
-        userStory TEXT NOT NULL,
-        currentBehavior TEXT NOT NULL,
-        expectedBehavior TEXT NOT NULL,
-        acceptanceCriteria TEXT,
-        potentialImplementation TEXT,
-        dependencies TEXT,
-        effortEstimate TEXT
-      )`,
+      // Feature requests removed
       `CREATE TABLE IF NOT EXISTS improvements (
         id TEXT PRIMARY KEY,
         status TEXT NOT NULL,
@@ -185,12 +169,7 @@ class ProjectManagementServer {
       `CREATE INDEX IF NOT EXISTS idx_bugs_priority ON bugs(priority)`,
       `CREATE INDEX IF NOT EXISTS idx_bugs_component ON bugs(component)`,
       `CREATE INDEX IF NOT EXISTS idx_bugs_date ON bugs(dateReported)`,
-      // features
-      `CREATE INDEX IF NOT EXISTS idx_features_status ON feature_requests(status)`,
-      `CREATE INDEX IF NOT EXISTS idx_features_priority ON feature_requests(priority)`,
-      `CREATE INDEX IF NOT EXISTS idx_features_category ON feature_requests(category)`,
-      `CREATE INDEX IF NOT EXISTS idx_features_requestedBy ON feature_requests(requestedBy)`,
-      `CREATE INDEX IF NOT EXISTS idx_features_date ON feature_requests(dateRequested)`,
+      // Feature indexes removed
       // improvements
       `CREATE INDEX IF NOT EXISTS idx_improvements_status ON improvements(status)`,
       `CREATE INDEX IF NOT EXISTS idx_improvements_priority ON improvements(priority)`,
@@ -222,17 +201,7 @@ class ProjectManagementServer {
       `CREATE TRIGGER IF NOT EXISTS trg_bugs_ad AFTER DELETE ON bugs BEGIN
          DELETE FROM item_fts WHERE id=old.id AND type='bug';
        END;`,
-      // Features triggers
-      `CREATE TRIGGER IF NOT EXISTS trg_features_ai AFTER INSERT ON feature_requests BEGIN
-         INSERT INTO item_fts(id,type,title,description) VALUES (new.id,'feature',new.title,new.description);
-       END;`,
-      `CREATE TRIGGER IF NOT EXISTS trg_features_au AFTER UPDATE ON feature_requests BEGIN
-         DELETE FROM item_fts WHERE id=old.id AND type='feature';
-         INSERT INTO item_fts(id,type,title,description) VALUES (new.id,'feature',new.title,new.description);
-       END;`,
-      `CREATE TRIGGER IF NOT EXISTS trg_features_ad AFTER DELETE ON feature_requests BEGIN
-         DELETE FROM item_fts WHERE id=old.id AND type='feature';
-       END;`,
+      // Feature FTS triggers removed
       // Improvements triggers
       `CREATE TRIGGER IF NOT EXISTS trg_improvements_ai AFTER INSERT ON improvements BEGIN
          INSERT INTO item_fts(id,type,title,description) VALUES (new.id,'improvement',new.title,new.description);
@@ -279,15 +248,15 @@ class ProjectManagementServer {
 
 
   private async createItem(args: any) {
-    const { type } = args;
+    // Validate input arguments
+    const validatedArgs = validateCreateItem(args);
+    const { type } = validatedArgs;
     
     switch (type) {
       case 'bug':
-        return this.bugManager.createBug(this.db, args);
-      case 'feature':
-        return this.featureManager.createFeatureRequest(this.db, args);
+        return this.bugManager.createBug(this.db, validatedArgs);
       case 'improvement':
-        return this.improvementManager.createImprovement(this.db, args);
+        return this.improvementManager.createImprovement(this.db, validatedArgs);
       default:
         throw new Error(`Unknown item type: ${type}`);
     }
@@ -299,8 +268,6 @@ class ProjectManagementServer {
     switch (type) {
       case 'bug':
         return this.bugManager.listBugs(this.db, args);
-      case 'feature':
-        return this.featureManager.listFeatureRequests(this.db, args);
       case 'improvement':
         return this.improvementManager.listImprovements(this.db, args);
       default:
@@ -309,14 +276,16 @@ class ProjectManagementServer {
   }
 
   private async updateItemStatus(args: any) {
-    const { itemId } = args;
+    // Validate input arguments
+    const validatedArgs = validateUpdateItemStatus(args);
+    const { itemId } = validatedArgs;
     
     if (itemId.startsWith('Bug')) {
-      return this.bugManager.updateBugStatus(this.db, args);
+      return this.bugManager.updateBugStatus(this.db, validatedArgs);
     } else if (itemId.startsWith('FR-')) {
-      return this.featureManager.updateFeatureStatus(this.db, args);
+      throw new Error('Feature requests are no longer supported');
     } else if (itemId.startsWith('IMP-')) {
-      return this.improvementManager.updateImprovementStatus(this.db, args);
+      return this.improvementManager.updateImprovementStatus(this.db, validatedArgs);
     } else {
       throw new Error(`Unknown item type for ID: ${itemId}`);
     }
@@ -331,7 +300,7 @@ class ProjectManagementServer {
 
     // Group updates by type
     const bugUpdates = updates.filter(u => u.itemId.startsWith('Bug'));
-    const featureUpdates = updates.filter(u => u.itemId.startsWith('FR-'));
+    const featureUpdates: any[] = [];
     const improvementUpdates = updates.filter(u => u.itemId.startsWith('IMP-'));
 
     let results: string[] = [];
@@ -341,10 +310,7 @@ class ProjectManagementServer {
       results.push(result);
     }
 
-    if (featureUpdates.length > 0) {
-      const result = await this.featureManager.bulkUpdateFeatureStatus(this.db, { updates: featureUpdates });
-      results.push(result);
-    }
+    // Feature updates no longer supported
 
     if (improvementUpdates.length > 0) {
       const result = await this.improvementManager.bulkUpdateImprovementStatus(this.db, { updates: improvementUpdates });
@@ -361,14 +327,31 @@ class ProjectManagementServer {
       return {
         tools: [
           {
+            name: 'create_todo',
+            description: 'Quickly create a lightweight TODO (stored as an improvement)',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: 'Short task title' },
+                description: { type: 'string', description: 'Optional details' },
+                priority: { type: 'string', enum: ['Low', 'Medium', 'High'], description: 'Task priority' },
+                status: { type: 'string', enum: ['Todo', 'Doing', 'Blocked', 'Done'], description: 'Optional TODO status' },
+                filesLikelyInvolved: { type: 'array', items: { type: 'string' } },
+                linkTo: { type: 'string', description: 'ID to link this TODO to (e.g., Bug #001)' },
+              },
+              required: ['title'],
+              additionalProperties: false
+            }
+          },
+          {
             name: 'create_item',
-            description: 'Create a new bug, feature request, or improvement',
+            description: 'Create a new bug or improvement',
             inputSchema: {
               type: 'object',
               properties: {
                 type: {
                   type: 'string',
-                  enum: ['bug', 'feature', 'improvement'],
+                  enum: ['bug', 'improvement'],
                   description: 'Type of item to create'
                 },
                 title: { type: 'string', description: 'Item title' },
@@ -380,7 +363,7 @@ class ProjectManagementServer {
                 },
                 // Bug-specific fields
                 component: { type: 'string', description: 'Component affected (bugs only)' },
-                expectedBehavior: { type: 'string', description: 'What should happen (bugs/features)' },
+                expectedBehavior: { type: 'string', description: 'What should happen (bugs only)' },
                 actualBehavior: { type: 'string', description: 'What actually happens (bugs only)' },
                 potentialRootCause: { type: 'string', description: 'Hypothesis about the cause (bugs only)' },
                 stepsToReproduce: { 
@@ -393,21 +376,11 @@ class ProjectManagementServer {
                   items: { type: 'string' }, 
                   description: 'Files that might be involved (bugs/improvements)' 
                 },
-                // Feature-specific fields
-                category: { type: 'string', description: 'Category (features/improvements)' },
-                requestedBy: { type: 'string', description: 'Who requested this (features/improvements)' },
-                userStory: { type: 'string', description: 'User story format (features only)' },
-                currentBehavior: { type: 'string', description: 'Current system behavior (features only)' },
-                acceptanceCriteria: { 
-                  type: 'array', 
-                  items: { type: 'string' }, 
-                  description: 'Acceptance criteria checklist (features/improvements)' 
-                },
-                effortEstimate: {
-                  type: 'string',
-                  enum: ['Small', 'Medium', 'Large', 'XL'],
-                  description: 'Effort estimate (features/improvements)'
-                },
+                // Improvement fields
+                category: { type: 'string', description: 'Category (improvements only)' },
+                requestedBy: { type: 'string', description: 'Who requested this (improvements only)' },
+                acceptanceCriteria: { type: 'array', items: { type: 'string' }, description: 'Acceptance criteria (improvements only)' },
+                effortEstimate: { type: 'string', enum: ['Small', 'Medium', 'Large', 'XL'], description: 'Effort estimate (improvements only)' },
                 // Improvement-specific fields
                 currentState: { type: 'string', description: 'Current state (improvements only)' },
                 desiredState: { type: 'string', description: 'Desired state after improvement (improvements only)' },
@@ -418,14 +391,19 @@ class ProjectManagementServer {
           },
           {
             name: 'list_items',
-            description: 'List bugs, feature requests, or improvements with optional filtering',
+            description: 'List bugs or improvements with optional filtering',
             inputSchema: {
               type: 'object',
               properties: {
                 type: {
                   type: 'string',
-                  enum: ['bug', 'feature', 'improvement'],
+                  enum: ['bug', 'improvement'],
                   description: 'Type of items to list'
+                },
+                view: {
+                  type: 'string',
+                  enum: ['todos', 'blocked', 'done', 'today'],
+                  description: 'Predefined views for improvements (ignored for bugs)'
                 },
                 status: { type: 'string', description: 'Filter by status (status values depend on item type)' },
                 priority: {
@@ -433,7 +411,7 @@ class ProjectManagementServer {
                   enum: ['Low', 'Medium', 'High', 'Critical'],
                   description: 'Filter by priority'
                 },
-                category: { type: 'string', description: 'Filter by category (features/improvements)' },
+                category: { type: 'string', description: 'Filter by category (improvements only)' },
                 component: { type: 'string', description: 'Filter by component (bugs only)' },
                 includeCodeContext: { 
                   type: 'boolean', 
@@ -446,21 +424,21 @@ class ProjectManagementServer {
           },
           {
             name: 'update_item_status',
-            description: 'Update status of a bug, feature request, or improvement',
+            description: 'Update status of a bug or improvement',
             inputSchema: {
               type: 'object',
               properties: {
-                itemId: { type: 'string', description: 'Item ID (e.g., Bug #001, FR-001, IMP-001)' },
+                itemId: { type: 'string', description: 'Item ID (e.g., Bug #001, IMP-001)' },
                 status: { 
                   type: 'string', 
-                  description: 'New status. For bugs: Open, In Progress, Fixed, Closed, Temporarily Resolved. For features: Proposed, In Discussion, Approved, In Development, Research Phase, Partially Implemented, Completed, Rejected. For improvements: Proposed, In Discussion, Approved, In Development, Completed (Awaiting Human Verification), Completed, Rejected',
+                  description: 'New status. For bugs: Open, In Progress, Fixed, Closed, Temporarily Resolved. For improvements: Proposed, In Discussion, Approved, In Development, Completed (Awaiting Human Verification), Completed, Rejected. Also accepts TODO statuses (Todo, Doing, Blocked, Done) for improvements.',
                   enum: [
                     // Bug statuses
                     'Open', 'In Progress', 'Fixed', 'Closed', 'Temporarily Resolved',
-                    // Feature statuses  
-                    'Proposed', 'In Discussion', 'Approved', 'In Development', 'Research Phase', 'Partially Implemented', 'Completed', 'Rejected',
                     // Improvement statuses (includes 'Completed (Awaiting Human Verification)')
-                    'Completed (Awaiting Human Verification)'
+                    'Proposed', 'In Discussion', 'Approved', 'In Development', 'Completed', 'Rejected', 'Completed (Awaiting Human Verification)',
+                    // Lightweight TODO statuses (mapped server-side for improvements)
+                    'Todo', 'Doing', 'Blocked', 'Done'
                   ]
                 },
                 humanVerified: { type: 'boolean', description: 'Whether human verification is complete (bugs only)' },
@@ -472,16 +450,12 @@ class ProjectManagementServer {
           },
           {
             name: 'search_items',
-            description: 'Advanced search across bugs, features, and improvements with filtering, sorting, and pagination',
+            description: 'Advanced search across bugs and improvements with filtering, sorting, and pagination',
             inputSchema: {
               type: 'object',
               properties: {
                 query: { type: 'string', description: 'Search query (optional - can search with filters only)' },
-                type: {
-                  type: 'string',
-                  enum: ['bugs', 'features', 'improvements', 'all'],
-                  description: 'Type of items to search'
-                },
+                type: { type: 'string', enum: ['bugs', 'improvements', 'all'], description: 'Type of items to search' },
                 status: { 
                   type: ['string', 'array'], 
                   description: 'Filter by status (single value or array of values)' 
@@ -492,10 +466,7 @@ class ProjectManagementServer {
                 },
                 category: { type: 'string', description: 'Filter by category (partial match)' },
                 component: { type: 'string', description: 'Filter by component (partial match, bugs only)' },
-                effortEstimate: { 
-                  type: ['string', 'array'], 
-                  description: 'Filter by effort estimate (features/improvements only)' 
-                },
+                effortEstimate: { type: ['string', 'array'], description: 'Filter by effort estimate (improvements only)' },
                 humanVerified: { type: 'boolean', description: 'Filter by human verification status (bugs only)' },
                 dateFrom: { type: 'string', description: 'Start date for date range filter (YYYY-MM-DD)' },
                 dateTo: { type: 'string', description: 'End date for date range filter (YYYY-MM-DD)' },
@@ -526,23 +497,19 @@ class ProjectManagementServer {
             inputSchema: {
               type: 'object',
               properties: {
-                type: {
-                  type: 'string',
-                  enum: ['bugs', 'features', 'improvements', 'all'],
-                  description: 'Type of statistics to generate'
-                }
+                type: { type: 'string', enum: ['bugs', 'improvements', 'all'], description: 'Type of statistics to generate' }
               },
               additionalProperties: false
             }
           },
           {
             name: 'link_items',
-            description: 'Create relationships between bugs, features, and improvements',
+            description: 'Create relationships between bugs and improvements',
             inputSchema: {
               type: 'object',
               properties: {
-                fromItem: { type: 'string', description: 'Source item ID (e.g., Bug #001, FR-001, IMP-001)' },
-                toItem: { type: 'string', description: 'Target item ID (e.g., Bug #002, FR-002, IMP-002)' },
+                fromItem: { type: 'string', description: 'Source item ID (e.g., Bug #001, IMP-001)' },
+                toItem: { type: 'string', description: 'Target item ID (e.g., Bug #002, IMP-002)' },
                 relationshipType: {
                   type: 'string',
                   enum: ['blocks', 'relates_to', 'duplicate_of'],
@@ -555,11 +522,11 @@ class ProjectManagementServer {
           },
           {
             name: 'get_related_items',
-            description: 'Get items related to a specific item',
+            description: 'Get items related to a specific bug or improvement',
             inputSchema: {
               type: 'object',
               properties: {
-                itemId: { type: 'string', description: 'Item ID to find relationships for (e.g., Bug #001, FR-001, IMP-001)' }
+                itemId: { type: 'string', description: 'Item ID to find relationships for (e.g., Bug #001, IMP-001)' }
               },
               required: ['itemId'],
               additionalProperties: false
@@ -567,7 +534,7 @@ class ProjectManagementServer {
           },
           {
             name: 'bulk_update_items',
-            description: 'Update multiple items (bugs, features, or improvements) in a single operation',
+            description: 'Update multiple items (bugs or improvements) in a single operation',
             inputSchema: {
               type: 'object',
               properties: {
@@ -576,17 +543,17 @@ class ProjectManagementServer {
                   items: {
                     type: 'object',
                     properties: {
-                      itemId: { type: 'string', description: 'Item ID (e.g., Bug #001, FR-001, IMP-001)' },
+                      itemId: { type: 'string', description: 'Item ID (e.g., Bug #001, IMP-001)' },
                       status: { 
                         type: 'string', 
-                        description: 'New status. For bugs: Open, In Progress, Fixed, Closed, Temporarily Resolved. For features: Proposed, In Discussion, Approved, In Development, Research Phase, Partially Implemented, Completed, Rejected. For improvements: Proposed, In Discussion, Approved, In Development, Completed (Awaiting Human Verification), Completed, Rejected',
+                        description: 'New status. For bugs: Open, In Progress, Fixed, Closed, Temporarily Resolved. For improvements: Proposed, In Discussion, Approved, In Development, Completed (Awaiting Human Verification), Completed, Rejected. Also accepts TODO statuses.',
                         enum: [
                           // Bug statuses
                           'Open', 'In Progress', 'Fixed', 'Closed', 'Temporarily Resolved',
-                          // Feature statuses  
-                          'Proposed', 'In Discussion', 'Approved', 'In Development', 'Research Phase', 'Partially Implemented', 'Completed', 'Rejected',
-                          // Improvement statuses (includes 'Completed (Awaiting Human Verification)')
-                          'Completed (Awaiting Human Verification)'
+                          // Improvement statuses
+                          'Proposed', 'In Discussion', 'Approved', 'In Development', 'Completed', 'Rejected', 'Completed (Awaiting Human Verification)',
+                          // TODO statuses mapped for improvements
+                          'Todo', 'Doing', 'Blocked', 'Done'
                         ]
                       },
                       humanVerified: { type: 'boolean', description: 'Whether human verification is complete (bugs only)' },
@@ -618,7 +585,7 @@ class ProjectManagementServer {
                   items: {
                     type: 'object',
                     properties: {
-                      type: { type: 'string', enum: ['bug', 'feature', 'improvement'] },
+                      type: { type: 'string', enum: ['bug', 'improvement'] },
                       data: { type: 'object', description: 'Item data' },
                       linkTo: { type: 'string', description: 'ID of item to link to' },
                       relationshipType: { type: 'string', enum: ['blocks', 'relates_to', 'duplicate_of'] }
@@ -633,7 +600,7 @@ class ProjectManagementServer {
                     type: 'object',
                     properties: {
                       taskId: { type: 'string' },
-                      taskType: { type: 'string', enum: ['bug', 'feature', 'improvement'] },
+                      taskType: { type: 'string', enum: ['bug', 'improvement'] },
                       title: { type: 'string' },
                       description: { type: 'string' }
                     },
@@ -672,11 +639,7 @@ class ProjectManagementServer {
                   description: 'The context operation to perform'
                 },
                 taskId: { type: 'string', description: 'Task ID' },
-                taskType: { 
-                  type: 'string', 
-                  enum: ['bug', 'feature', 'improvement'], 
-                  description: 'Type of task (required for collect/add operations)' 
-                },
+                taskType: { type: 'string', enum: ['bug', 'improvement'], description: 'Type of task (required for collect/add operations)' },
                 title: { type: 'string', description: 'Task title (for collect operation)' },
                 description: { type: 'string', description: 'Task description (for collect operation)' },
                 currentState: { type: 'string', description: 'Current state (for improvements, collect operation)' },
@@ -750,6 +713,30 @@ class ProjectManagementServer {
         let result: string;
 
         switch (name) {
+          case 'create_todo':
+            result = await this.withTransaction(async () => {
+              // Create the TODO (as an improvement)
+              const created = await this.improvementManager.createTodo(this.db, args);
+              // Optionally link to another item
+              if (args?.linkTo) {
+                // Extract created ID (e.g., IMP-001)
+                const match = created.match(/(IMP-\d+)/);
+                if (match) {
+                  try {
+                    await this.workflowManager.linkItems(this.db, {
+                      fromItem: match[1],
+                      toItem: args.linkTo,
+                      relationshipType: 'relates_to',
+                    });
+                  } catch {
+                    // Linking errors should not fail creation
+                  }
+                }
+              }
+              return created;
+            });
+            this.scheduleFtsRebuild();
+            break;
           case 'create_item':
             result = await this.withTransaction(() => this.createItem(args));
             this.scheduleFtsRebuild();

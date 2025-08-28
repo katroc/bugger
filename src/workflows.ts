@@ -1,7 +1,6 @@
 // Workflow automation operations
 import { TokenUsageTracker } from './token-usage-tracker.js';
 import { BugManager } from './bugs.js';
-import { FeatureManager } from './features.js';
 import { ImprovementManager } from './improvements.js';
 import { ContextManager } from './context.js';
 import sqlite3 from 'sqlite3';
@@ -9,14 +8,12 @@ import sqlite3 from 'sqlite3';
 export class WorkflowManager {
   private tokenTracker: TokenUsageTracker;
   private bugManager: BugManager;
-  private featureManager: FeatureManager;
   private improvementManager: ImprovementManager;
   private contextManager: ContextManager;
 
   constructor() {
     this.tokenTracker = TokenUsageTracker.getInstance();
     this.bugManager = new BugManager();
-    this.featureManager = new FeatureManager();
     this.improvementManager = new ImprovementManager();
     this.contextManager = new ContextManager();
   }
@@ -66,9 +63,7 @@ export class WorkflowManager {
             itemId = this.extractIdFromCreateResponse(createResult, 'bug');
             break;
           case 'feature':
-            createResult = await this.featureManager.createFeatureRequest(db, item.data);
-            itemId = this.extractIdFromCreateResponse(createResult, 'feature');
-            break;
+            throw new Error('Feature requests are no longer supported');
           case 'improvement':
             createResult = await this.improvementManager.createImprovement(db, item.data);
             itemId = this.extractIdFromCreateResponse(createResult, 'improvement');
@@ -206,10 +201,7 @@ export class WorkflowManager {
               status: transition.toStatus
             });
           } else if (transition.itemId.startsWith('FR-')) {
-            updateResult = await this.featureManager.updateFeatureStatus(db, {
-              itemId: transition.itemId,
-              status: transition.toStatus
-            });
+            throw new Error('Feature requests are no longer supported');
           } else if (transition.itemId.startsWith('IMP-')) {
             updateResult = await this.improvementManager.updateImprovementStatus(db, {
               itemId: transition.itemId,
@@ -351,7 +343,8 @@ export class WorkflowManager {
       if (itemId.startsWith('Bug')) {
         query = 'SELECT 1 FROM bugs WHERE id = ?';
       } else if (itemId.startsWith('FR-')) {
-        query = 'SELECT 1 FROM feature_requests WHERE id = ?';
+        resolve(false);
+        return;
       } else if (itemId.startsWith('IMP-')) {
         query = 'SELECT 1 FROM improvements WHERE id = ?';
       } else {
