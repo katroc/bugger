@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/katroc/bugger/compare/v1.0.2...v1.1.0) (2025-08-28)
+
+
+### Features
+
+* **todo:** add TODO mode and remove feature requests\n\n- Add create_todo tool and TODO status mapping\n- Simplify improvements listing with TODO views\n- Remove Feature Requests across server, search, workflows, validation, format, tests, and docs\n- Update README and package metadata\n- Keep backward-compatible IDs and improvement schema ([2c331ec](https://github.com/katroc/bugger/commit/2c331ec6a82e46d99408d676fcee467f34db6712))
+* **todo:** Introduce TODO mode; remove Feature Requests ([e4a175a](https://github.com/katroc/bugger/commit/e4a175a1f211ddef94b84bdadbec53357a542c9f))
+
 ## [1.0.2](https://github.com/katroc/bugger/compare/v1.0.1...v1.0.2) (2025-08-27)
 
 
